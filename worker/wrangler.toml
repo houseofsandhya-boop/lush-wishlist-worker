@@ -1,0 +1,14 @@
+name = "lush-wishlist-worker"
+main = "src/index.js"
+compatibility_date = "2026-08-08"
+
+[vars]
+SHOPIFY_SHOP = "p1mtpu-cr.myshopify.com"
+SHOPIFY_API_KEY = "c79da0401815bea6c7be8e559817e0a6"
+SHOPIFY_API_VERSION = "2026-01"
+WISHLIST_NAMESPACE = "custom"
+WISHLIST_KEY = "wishlist"
+
+[[kv_namespaces]]
+binding = "WISHLIST_TOKENS"
+id = "5530951531f7469b8c5fff47e4179dfd"
