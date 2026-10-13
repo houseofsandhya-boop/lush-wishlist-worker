@@ -9,14 +9,8 @@
     return;
   }
 
-  if (!context.productId) return;
-
-  const productGid = `gid://shopify/Product/${context.productId}`;
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = 'wishlist-app-button';
-  button.textContent = context.buttonLabel || 'Add to wishlist';
-  button.setAttribute('aria-pressed', 'false');
+  const productCache = new Map();
+  let wishlistIds = [];
 
   const style = document.createElement('style');
   style.textContent = `
@@ -36,8 +30,30 @@
       text-transform: inherit;
     }
 
-    .wishlist-app-button[aria-pressed="true"] {
-      background: currentColor;
+    .wishlist-app-card-button {
+      position: absolute;
+      z-index: 3;
+      top: 10px;
+      right: 10px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 38px;
+      height: 38px;
+      border: 1px solid rgba(0, 0, 0, 0.12);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.92);
+      color: #111;
+      cursor: pointer;
+      font-size: 20px;
+      line-height: 1;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+    }
+
+    .wishlist-app-button[aria-pressed="true"],
+    .wishlist-app-card-button[aria-pressed="true"] {
+      background: #111;
+      color: #fff;
     }
   `;
   document.head.appendChild(style);
@@ -58,21 +74,24 @@
     return response.json();
   };
 
-  const setAdded = (isAdded) => {
+  const productGid = (id) => `gid://shopify/Product/${id}`;
+
+  const setPressed = (button, isAdded, labels = {}) => {
     button.dataset.added = isAdded ? 'true' : 'false';
     button.setAttribute('aria-pressed', isAdded ? 'true' : 'false');
-    button.textContent = isAdded
-      ? context.addedLabel || 'Added to wishlist'
-      : context.buttonLabel || 'Add to wishlist';
+
+    if (labels.add && labels.added) {
+      button.textContent = isAdded ? labels.added : labels.add;
+      return;
+    }
+
+    button.textContent = isAdded ? '♥' : '♡';
+    button.setAttribute('aria-label', isAdded ? 'Remove from wishlist' : 'Add to wishlist');
+    button.setAttribute('title', isAdded ? 'Remove from wishlist' : 'Add to wishlist');
   };
 
-  const mount = () => {
-    const form = document.querySelector('form[action*="/cart/add"]');
-    if (!form || form.parentElement?.querySelector('.wishlist-app-button')) return;
-    form.insertAdjacentElement('afterend', button);
-  };
-
-  button.addEventListener('click', async () => {
+  const toggleProduct = async (button, id, labels) => {
+    const gid = productGid(id);
     const isAdded = button.dataset.added === 'true';
     button.disabled = true;
 
@@ -80,22 +99,136 @@
       const action = isAdded ? '/remove' : '/add';
       await request(action, {
         method: 'POST',
-        body: JSON.stringify({ productId: productGid }),
+        body: JSON.stringify({ productId: gid }),
       });
-      setAdded(!isAdded);
+
+      wishlistIds = isAdded
+        ? wishlistIds.filter((productId) => productId !== gid)
+        : [...new Set([...wishlistIds, gid])];
+
+      document.querySelectorAll(`[data-wishlist-product-id="${id}"]`).forEach((item) => {
+        setPressed(item, !isAdded, labels);
+      });
     } catch {
-      button.textContent = 'Try again';
+      button.textContent = '!';
     } finally {
       button.disabled = false;
     }
-  });
+  };
 
-  mount();
+  const productHandleFromUrl = (href) => {
+    try {
+      const url = new URL(href, window.location.origin);
+      const match = url.pathname.match(/\/products\/([^/?#]+)/);
+      return match ? decodeURIComponent(match[1]) : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const fetchProductByHandle = async (handle) => {
+    if (productCache.has(handle)) return productCache.get(handle);
+
+    const promise = fetch(`/products/${encodeURIComponent(handle)}.js`, {
+      credentials: 'same-origin',
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error('Product lookup failed');
+        return response.json();
+      })
+      .then((product) => ({ id: product.id, handle }));
+
+    productCache.set(handle, promise);
+    return promise;
+  };
+
+  const findProductCard = (link) =>
+    link.closest('.card-wrapper, .card, .product-card, .grid__item, li, article') || link.parentElement;
+
+  const mountCardButtons = () => {
+    const links = [...document.querySelectorAll('a[href*="/products/"]')];
+    const seenHandles = new Set();
+
+    for (const link of links) {
+      const handle = productHandleFromUrl(link.href);
+      if (!handle || seenHandles.has(handle)) continue;
+      seenHandles.add(handle);
+
+      const card = findProductCard(link);
+      if (!card || card.querySelector('.wishlist-app-card-button')) continue;
+
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'wishlist-app-card-button';
+      button.textContent = '♡';
+      button.setAttribute('aria-label', 'Add to wishlist');
+
+      if (getComputedStyle(card).position === 'static') {
+        card.style.position = 'relative';
+      }
+
+      button.addEventListener('click', async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+
+        try {
+          const product = await fetchProductByHandle(handle);
+          button.dataset.wishlistProductId = String(product.id);
+          await toggleProduct(button, product.id);
+        } catch {
+          button.textContent = '!';
+        }
+      });
+
+      card.appendChild(button);
+
+      fetchProductByHandle(handle)
+        .then((product) => {
+          button.dataset.wishlistProductId = String(product.id);
+          setPressed(button, wishlistIds.includes(productGid(product.id)));
+        })
+        .catch(() => {});
+    }
+  };
+
+  const mountProductPageButton = () => {
+    if (!context.productId) return;
+
+    const id = context.productId;
+    const gid = productGid(id);
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'wishlist-app-button';
+    button.dataset.wishlistProductId = String(id);
+
+    const labels = {
+      add: context.buttonLabel || 'Add to wishlist',
+      added: context.addedLabel || 'Added to wishlist',
+    };
+
+    setPressed(button, wishlistIds.includes(gid), labels);
+
+    const form = document.querySelector('form[action*="/cart/add"]');
+    if (!form || form.parentElement?.querySelector('.wishlist-app-button')) return;
+    form.insertAdjacentElement('afterend', button);
+
+    button.addEventListener('click', () => toggleProduct(button, id, labels));
+  };
+
+  const mountAll = () => {
+    mountProductPageButton();
+    mountCardButtons();
+  };
 
   request('/ids')
     .then((data) => {
-      if (!data) return;
-      setAdded((data.productIds || []).includes(productGid));
+      wishlistIds = data?.productIds || [];
+      mountAll();
     })
-    .catch(() => {});
+    .catch(() => {
+      mountAll();
+    });
+
+  const observer = new MutationObserver(() => mountCardButtons());
+  observer.observe(document.documentElement, { childList: true, subtree: true });
 })();
