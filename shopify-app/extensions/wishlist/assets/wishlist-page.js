@@ -25,14 +25,17 @@
 
     .wishlist-page__grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-      gap: 24px;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 220px));
+      justify-content: start;
+      align-items: start;
+      gap: 28px 18px;
     }
 
     .wishlist-card {
       display: grid;
       gap: 10px;
       color: inherit;
+      max-width: 220px;
     }
 
     .wishlist-card__image {
@@ -60,6 +63,21 @@
       color: inherit;
       cursor: pointer;
       font: inherit;
+    }
+
+    @media (max-width: 749px) {
+      .wishlist-page {
+        padding: 24px 14px;
+      }
+
+      .wishlist-page__grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 22px 12px;
+      }
+
+      .wishlist-card {
+        max-width: none;
+      }
     }
   `;
   document.head.appendChild(styles);
