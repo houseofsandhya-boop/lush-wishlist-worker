@@ -59,14 +59,17 @@
   document.head.appendChild(style);
 
   const request = async (path, options = {}) => {
+    const { redirectOnAuth = false, ...fetchOptions } = options;
     const response = await fetch(`/apps/wishlist${path}`, {
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
-      ...options,
+      ...fetchOptions,
     });
 
     if (response.status === 401) {
-      window.location.href = context.loginUrl || '/account/login';
+      if (redirectOnAuth) {
+        window.location.href = context.loginUrl || '/account/login';
+      }
       return null;
     }
 
@@ -98,6 +101,7 @@
     try {
       const action = isAdded ? '/remove' : '/add';
       await request(action, {
+        redirectOnAuth: true,
         method: 'POST',
         body: JSON.stringify({ productId: gid }),
       });

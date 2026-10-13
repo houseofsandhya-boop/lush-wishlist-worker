@@ -65,14 +65,17 @@
   document.head.appendChild(styles);
 
   const request = async (path, options = {}) => {
+    const { redirectOnAuth = false, ...fetchOptions } = options;
     const response = await fetch(`/apps/wishlist${path}`, {
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
-      ...options,
+      ...fetchOptions,
     });
 
     if (response.status === 401) {
-      window.location.href = loginUrl;
+      if (redirectOnAuth) {
+        window.location.href = loginUrl;
+      }
       return null;
     }
 
@@ -122,6 +125,7 @@
       remove.addEventListener('click', async () => {
         remove.disabled = true;
         await request('/remove', {
+          redirectOnAuth: true,
           method: 'POST',
           body: JSON.stringify({ productId: product.id }),
         });
@@ -140,7 +144,10 @@
 
   request('')
     .then((data) => {
-      if (!data) return;
+      if (!data) {
+        status.textContent = 'Log in to view your wishlist.';
+        return;
+      }
       render(data.products || []);
     })
     .catch(() => {
