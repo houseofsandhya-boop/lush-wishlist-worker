@@ -1,0 +1,27 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "2103be1907ad7d7057c951aecb7cd07c"
+name = "Wishlist"
+application_url = "https://lush-wishlist-worker-second-store.houseofsandhya.workers.dev/auth/start"
+embedded = false
+
+[build]
+automatically_update_urls_on_dev = true
+
+[webhooks]
+api_version = "2026-10"
+
+[access.admin]
+direct_api_mode = "online"
+embedded_app_direct_api_access = true
+
+[access_scopes]
+scopes = "read_customers,write_customers,read_products,write_app_proxy"
+
+[app_proxy]
+url = "https://lush-wishlist-worker-second-store.houseofsandhya.workers.dev"
+prefix = "apps"
+subpath = "wishlist"
+
+[auth]
+redirect_urls = [ "https://lush-wishlist-worker-second-store.houseofsandhya.workers.dev/auth/callback" ]

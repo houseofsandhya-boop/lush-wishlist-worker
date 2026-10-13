@@ -1,0 +1,30 @@
+<script id="wishlist-app-context" type="application/json">
+  {
+    "buttonLabel": {{ block.settings.button_label | json }},
+    "addedLabel": {{ block.settings.added_label | json }},
+    "loginUrl": {{ routes.account_login_url | json }},
+    "productId": {% if product %}{{ product.id | json }}{% else %}null{% endif %}
+  }
+</script>
+
+{% schema %}
+{
+  "name": "Wishlist",
+  "target": "body",
+  "javascript": "wishlist.js",
+  "settings": [
+    {
+      "type": "text",
+      "id": "button_label",
+      "label": "Button label",
+      "default": "Add to wishlist"
+    },
+    {
+      "type": "text",
+      "id": "added_label",
+      "label": "Added label",
+      "default": "Added to wishlist"
+    }
+  ]
+}
+{% endschema %}

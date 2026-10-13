@@ -1,0 +1,15 @@
+name = "lush-wishlist-worker-second-store"
+main = "src/index.js"
+compatibility_date = "2026-08-08"
+
+[vars]
+# Replace this with the second merchant's myshopify.com domain before deploy.
+SHOPIFY_SHOP = "vxfxj7-10.myshopify.com"
+SHOPIFY_API_KEY = "2103be1907ad7d7057c951aecb7cd07c"
+SHOPIFY_API_VERSION = "2026-01"
+WISHLIST_NAMESPACE = "custom"
+WISHLIST_KEY = "wishlist"
+
+[[kv_namespaces]]
+binding = "WISHLIST_TOKENS"
+id = "4320bdffecbe48dfb58c161f3e2207ed"

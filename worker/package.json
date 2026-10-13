@@ -3,8 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy"
+    "dev": "npx wrangler dev",
+    "deploy": "npx wrangler deploy",
+    "deploy:second-store": "npx wrangler deploy --config wrangler.second-store.toml",
+    "secret:second-store": "npx wrangler secret put SHOPIFY_API_SECRET --config wrangler.second-store.toml"
   },
   "devDependencies": {
     "wrangler": "^4.120.0"
