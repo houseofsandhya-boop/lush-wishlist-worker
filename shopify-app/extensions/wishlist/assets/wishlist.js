@@ -11,6 +11,7 @@
 
   const productCache = new Map();
   let wishlistIds = [];
+  const isProductPage = Boolean(context.productId);
 
   const style = document.createElement('style');
   style.textContent = `
@@ -220,7 +221,6 @@
         .then((product) => {
           button.dataset.wishlistProductId = String(product.id);
           setPressed(button, wishlistIds.includes(productGid(product.id)));
-          syncProductPageHeartButtons();
         })
         .catch(() => {});
     }
@@ -252,8 +252,9 @@
 
   const mountAll = () => {
     mountProductPageButton();
-    mountCardButtons();
-    syncProductPageHeartButtons();
+    if (!isProductPage) {
+      mountCardButtons();
+    }
   };
 
   request('/ids')
@@ -265,9 +266,8 @@
       mountAll();
     });
 
-  const observer = new MutationObserver(() => {
-    mountCardButtons();
-    syncProductPageHeartButtons();
-  });
-  observer.observe(document.documentElement, { childList: true, subtree: true });
+  if (!isProductPage) {
+    window.setTimeout(mountCardButtons, 1000);
+    window.setTimeout(mountCardButtons, 3000);
+  }
 })();
