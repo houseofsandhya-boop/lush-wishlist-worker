@@ -191,8 +191,8 @@
       '.wishlist-card, .card-wrapper, .card, .product-card, .product-item, .product-grid-item, .grid__item, [class*="product-card"], [class*="product-item"], li, article'
     ) || link.parentElement;
 
-  const mountCardButtons = () => {
-    const links = [...document.querySelectorAll('a[href*="/products/"]')];
+  const mountCardButtons = (root = document) => {
+    const links = [...root.querySelectorAll('a[href*="/products/"]')];
 
     for (const link of links) {
       const handle = productHandleFromUrl(link.href);
@@ -234,6 +234,20 @@
         })
         .catch(() => {});
     }
+  };
+
+  const mountProductPageCards = () => {
+    const roots = [
+      ...document.querySelectorAll(
+        'product-recommendations,.product-recommendations,[id*="recommend"],[class*="recommend"]'
+      ),
+    ];
+    document.querySelectorAll('h2,h3').forEach((heading) => {
+      if (!/you may also like|recommend/i.test(heading.textContent || '')) return;
+      const section = heading.closest('section,.shopify-section,div');
+      if (section) roots.push(section);
+    });
+    [...new Set(roots)].forEach((root) => mountCardButtons(root));
   };
 
   const mountProductPageButton = () => {
@@ -314,7 +328,9 @@
   const mountAll = () => {
     mountProductPageHeart();
     mountProductPageButton();
-    if (!isProductPage) {
+    if (isProductPage) {
+      mountProductPageCards();
+    } else {
       mountCardButtons();
     }
   };
@@ -331,5 +347,8 @@
   if (!isProductPage) {
     window.setTimeout(mountCardButtons, 1000);
     window.setTimeout(mountCardButtons, 3000);
+  } else {
+    window.setTimeout(mountProductPageCards, 1000);
+    window.setTimeout(mountProductPageCards, 3000);
   }
 })();
