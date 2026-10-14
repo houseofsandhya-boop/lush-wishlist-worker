@@ -191,10 +191,11 @@
       '.wishlist-card, .card-wrapper, .card, .product-card, .product-item, .product-grid-item, .grid__item, [class*="product-card"], [class*="product-item"], li, article'
     ) || link.parentElement;
 
-  const mountCardButtons = (root = document) => {
+  const mountCardButtons = (root = document, minTop = 0) => {
     const links = [...root.querySelectorAll('a[href*="/products/"]')];
 
     for (const link of links) {
+      if (minTop && link.getBoundingClientRect().top + window.scrollY < minTop) continue;
       const handle = productHandleFromUrl(link.href);
       if (!handle) continue;
 
@@ -246,6 +247,7 @@
       if (!/you may also like|recommend/i.test(heading.textContent || '')) return;
       const section = heading.closest('section,.shopify-section,div');
       if (section) roots.push(section);
+      mountCardButtons(document, heading.getBoundingClientRect().bottom + window.scrollY);
     });
     [...new Set(roots)].forEach((root) => mountCardButtons(root));
   };
