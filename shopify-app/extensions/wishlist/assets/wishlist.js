@@ -51,8 +51,27 @@
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
     }
 
+    .wishlist-app-product-heart {
+      float: right;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 42px;
+      height: 42px;
+      margin-left: 12px;
+      border: 1px solid rgba(0, 0, 0, 0.12);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.96);
+      color: #111;
+      cursor: pointer;
+      font-size: 22px;
+      line-height: 1;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+    }
+
     .wishlist-app-button[aria-pressed="true"],
-    .wishlist-app-card-button[aria-pressed="true"] {
+    .wishlist-app-card-button[aria-pressed="true"],
+    .wishlist-app-product-heart[aria-pressed="true"] {
       background: #111;
       color: #fff;
     }
@@ -250,7 +269,28 @@
     button.addEventListener('click', () => toggleProduct(button, id, labels));
   };
 
+  const mountProductPageHeart = () => {
+    if (!context.productId || document.querySelector('.wishlist-app-product-heart')) return;
+
+    const id = String(context.productId);
+    const heart = document.createElement('button');
+    heart.type = 'button';
+    heart.className = 'wishlist-app-product-heart';
+    heart.dataset.wishlistProductId = id;
+    setPressed(heart, wishlistIds.includes(productGid(id)));
+
+    const title =
+      document.querySelector('h1') ||
+      document.querySelector('[class*="title"]') ||
+      document.querySelector('form[action*="/cart/add"]');
+
+    if (!title) return;
+    title.insertAdjacentElement('beforebegin', heart);
+    heart.addEventListener('click', () => toggleProduct(heart, id));
+  };
+
   const mountAll = () => {
+    mountProductPageHeart();
     mountProductPageButton();
     if (!isProductPage) {
       mountCardButtons();
