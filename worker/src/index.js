@@ -72,6 +72,8 @@ async function verifyOAuthHmac(url, secret) {
 }
 
 const tokenKey = (shop) => `shop:${shop}:admin_token`;
+const detailsKey = (env) => `${env.WISHLIST_KEY || 'wishlist'}_details`;
+const adminSessionKey = (session) => `admin_session:${session}`;
 
 async function getAdminToken(env) {
   const token = await env.WISHLIST_TOKENS?.get(tokenKey(env.SHOPIFY_SHOP));
@@ -103,6 +105,24 @@ async function shopifyGraphql(env, query, variables = {}) {
 
 const customerGid = (id) => `gid://shopify/Customer/${id}`;
 
+const escapeHtml = (value = '') =>
+  String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+const parseJsonArray = (value) => {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+};
+
 async function getWishlistIds(env, customerId) {
   const data = await shopifyGraphql(
     env,
@@ -120,19 +140,41 @@ async function getWishlistIds(env, customerId) {
     }
   );
 
-  const value = data.customer?.metafield?.value;
-  if (!value) return [];
-
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
-  } catch {
-    return [];
-  }
+  return parseJsonArray(data.customer?.metafield?.value);
 }
 
-async function setWishlistIds(env, customerId, productIds) {
+async function getWishlistData(env, customerId) {
+  const data = await shopifyGraphql(
+    env,
+    `query CustomerWishlist($id: ID!, $namespace: String!, $key: String!, $detailsKey: String!) {
+      customer(id: $id) {
+        ids: metafield(namespace: $namespace, key: $key) { value }
+        details: metafield(namespace: $namespace, key: $detailsKey) { value }
+      }
+    }`,
+    {
+      id: customerGid(customerId),
+      namespace: env.WISHLIST_NAMESPACE || 'custom',
+      key: env.WISHLIST_KEY || 'wishlist',
+      detailsKey: detailsKey(env),
+    }
+  );
+
+  return {
+    ids: parseJsonArray(data.customer?.ids?.value),
+    details: parseJsonArray(data.customer?.details?.value),
+  };
+}
+
+async function setWishlistData(env, customerId, productIds, details) {
   const uniqueIds = [...new Set(productIds)].slice(0, 100);
+  const cleanDetails = details
+    .filter((item) => uniqueIds.includes(item.productId))
+    .slice(0, 100)
+    .map((item) => ({
+      productId: item.productId,
+      addedAt: item.addedAt || null,
+    }));
   const data = await shopifyGraphql(
     env,
     `mutation SetCustomerWishlist($metafields: [MetafieldsSetInput!]!) {
@@ -150,6 +192,13 @@ async function setWishlistIds(env, customerId, productIds) {
           type: 'json',
           value: JSON.stringify(uniqueIds),
         },
+        {
+          ownerId: customerGid(customerId),
+          namespace: env.WISHLIST_NAMESPACE || 'custom',
+          key: detailsKey(env),
+          type: 'json',
+          value: JSON.stringify(cleanDetails),
+        },
       ],
     }
   );
@@ -157,6 +206,12 @@ async function setWishlistIds(env, customerId, productIds) {
   const errors = data.metafieldsSet?.userErrors || [];
   if (errors.length) throw new Error(JSON.stringify(errors));
   return uniqueIds;
+}
+
+async function createAdminSession(env) {
+  const session = randomHex(24);
+  await env.WISHLIST_TOKENS.put(adminSessionKey(session), env.SHOPIFY_SHOP, { expirationTtl: 3600 });
+  return session;
 }
 
 async function getProducts(env, productIds) {
@@ -200,11 +255,139 @@ async function getProducts(env, productIds) {
     }));
 }
 
+async function getWishlistCustomers(env) {
+  const customers = [];
+  let after = null;
+
+  for (let page = 0; page < 4; page += 1) {
+    const data = await shopifyGraphql(
+      env,
+      `query WishlistCustomers($after: String, $namespace: String!, $key: String!, $detailsKey: String!) {
+        customers(first: 100, after: $after, sortKey: UPDATED_AT, reverse: true) {
+          pageInfo { hasNextPage endCursor }
+          edges {
+            node {
+              id
+              displayName
+              email
+              phone
+              createdAt
+              ids: metafield(namespace: $namespace, key: $key) { value }
+              details: metafield(namespace: $namespace, key: $detailsKey) { value }
+            }
+          }
+        }
+      }`,
+      {
+        after,
+        namespace: env.WISHLIST_NAMESPACE || 'custom',
+        key: env.WISHLIST_KEY || 'wishlist',
+        detailsKey: detailsKey(env),
+      }
+    );
+
+    for (const edge of data.customers?.edges || []) {
+      const ids = parseJsonArray(edge.node.ids?.value);
+      if (ids.length) customers.push({ ...edge.node, ids, details: parseJsonArray(edge.node.details?.value) });
+    }
+
+    if (!data.customers?.pageInfo?.hasNextPage) break;
+    after = data.customers.pageInfo.endCursor;
+  }
+
+  return customers;
+}
+
+async function renderDashboard(env, session) {
+  const storedShop = await env.WISHLIST_TOKENS.get(adminSessionKey(session || ''));
+  if (storedShop !== env.SHOPIFY_SHOP) {
+    return new Response('Unauthorized dashboard session. Open the app again from Shopify admin.', {
+      status: 401,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+    });
+  }
+
+  const customers = await getWishlistCustomers(env);
+  const productIds = [...new Set(customers.flatMap((customer) => customer.ids))];
+  const products = await getProducts(env, productIds);
+  const productById = new Map(products.map((product) => [product.id, product]));
+  const totalItems = customers.reduce((sum, customer) => sum + customer.ids.length, 0);
+
+  const rows = customers
+    .flatMap((customer) =>
+      customer.ids.map((productId) => {
+        const product = productById.get(productId);
+        const detail = customer.details.find((item) => item.productId === productId) || {};
+        return `
+          <tr>
+            <td>
+              <strong>${escapeHtml(customer.displayName || 'Unknown customer')}</strong>
+              <small>${escapeHtml(customer.email || '')}</small>
+              <small>${escapeHtml(customer.phone || '')}</small>
+              <small>${escapeHtml(customer.id)}</small>
+            </td>
+            <td>
+              <strong>${escapeHtml(product?.title || productId)}</strong>
+              ${product?.url ? `<a href="https://${escapeHtml(env.SHOPIFY_SHOP)}${escapeHtml(product.url)}" target="_blank" rel="noreferrer">View product</a>` : ''}
+              <small>${escapeHtml(productId)}</small>
+            </td>
+            <td>${escapeHtml(product?.price || '')}</td>
+            <td>${detail.addedAt ? escapeHtml(new Date(detail.addedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })) : 'Unknown for old entries'}</td>
+          </tr>`;
+      })
+    )
+    .join('');
+
+  return new Response(
+    `<!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Wishlist Dashboard</title>
+        <style>
+          body{margin:0;font-family:Arial,sans-serif;background:#f6f6f7;color:#202223}
+          header{padding:24px 32px;background:#111;color:#fff}
+          main{padding:24px 32px}
+          .stats{display:flex;gap:12px;margin-bottom:18px}
+          .stat{background:#fff;border:1px solid #ddd;border-radius:8px;padding:16px;min-width:160px}
+          .stat strong{display:block;font-size:28px}
+          table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #ddd}
+          th,td{padding:12px;border-bottom:1px solid #eee;text-align:left;vertical-align:top}
+          th{background:#fafafa;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+          small,a{display:block;margin-top:4px;color:#616161}
+          .empty{background:#fff;border:1px solid #ddd;border-radius:8px;padding:24px}
+        </style>
+      </head>
+      <body>
+        <header><h1>Wishlist Dashboard</h1><p>${escapeHtml(env.SHOPIFY_SHOP)}</p></header>
+        <main>
+          <div class="stats">
+            <div class="stat"><span>Customers</span><strong>${customers.length}</strong></div>
+            <div class="stat"><span>Wishlist items</span><strong>${totalItems}</strong></div>
+          </div>
+          ${
+            rows
+              ? `<table><thead><tr><th>Customer</th><th>Product</th><th>Price</th><th>Wishlist time</th></tr></thead><tbody>${rows}</tbody></table>`
+              : '<div class="empty">No customer wishlist data found yet.</div>'
+          }
+        </main>
+      </body>
+    </html>`,
+    { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } }
+  );
+}
+
 async function handleAuthStart(request, env) {
   const url = new URL(request.url);
   const shop = (url.searchParams.get('shop') || env.SHOPIFY_SHOP || '').trim();
   if (!/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/i.test(shop)) {
     return badRequest('Missing valid shop');
+  }
+
+  if ((await getAdminToken(env)) && url.searchParams.get('hmac') && (await verifyOAuthHmac(url, env.SHOPIFY_API_SECRET))) {
+    const session = await createAdminSession(env);
+    return Response.redirect(`${url.origin}/dashboard?session=${session}`, 302);
   }
 
   const state = randomHex();
@@ -262,9 +445,8 @@ async function handleAuthCallback(request, env) {
   await env.WISHLIST_TOKENS.put(tokenKey(shop), data.access_token);
   await env.WISHLIST_TOKENS.delete(`state:${state}`);
 
-  return new Response('Lush Wishlist app installed. You can close this tab.', {
-    headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-  });
+  const session = await createAdminSession(env);
+  return Response.redirect(`${url.origin}/dashboard?session=${session}`, 302);
 }
 
 async function handleRequest(request, env) {
@@ -278,6 +460,10 @@ async function handleRequest(request, env) {
     return handleAuthCallback(request, env);
   }
 
+  if (url.pathname === '/dashboard') {
+    return renderDashboard(env, url.searchParams.get('session'));
+  }
+
   if (!(await verifyProxySignature(url, env.SHOPIFY_API_SECRET))) {
     return json({ error: 'Invalid app proxy signature' }, 403);
   }
@@ -286,7 +472,8 @@ async function handleRequest(request, env) {
   if (!customerId) return json({ error: 'Customer login required' }, 401);
 
   const suffix = url.pathname.replace(/^\/apps\/wishlist/, '') || '/';
-  const currentIds = await getWishlistIds(env, customerId);
+  const wishlist = await getWishlistData(env, customerId);
+  const currentIds = wishlist.ids;
 
   if (request.method === 'GET' && suffix === '/ids') {
     return json({ productIds: currentIds });
@@ -308,11 +495,21 @@ async function handleRequest(request, env) {
   }
 
   if (suffix === '/add') {
-    return json({ productIds: await setWishlistIds(env, customerId, [...currentIds, productId]) });
+    const details = wishlist.details.some((item) => item.productId === productId)
+      ? wishlist.details
+      : [...wishlist.details, { productId, addedAt: new Date().toISOString() }];
+    return json({ productIds: await setWishlistData(env, customerId, [...currentIds, productId], details) });
   }
 
   if (suffix === '/remove') {
-    return json({ productIds: await setWishlistIds(env, customerId, currentIds.filter((id) => id !== productId)) });
+    return json({
+      productIds: await setWishlistData(
+        env,
+        customerId,
+        currentIds.filter((id) => id !== productId),
+        wishlist.details.filter((item) => item.productId !== productId)
+      ),
+    });
   }
 
   return json({ error: 'Not found' }, 404);
