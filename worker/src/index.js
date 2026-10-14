@@ -126,6 +126,23 @@ const parseJsonArray = (value) => {
 const formatIndiaTime = (value) =>
   value ? new Date(value).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : '';
 
+const formatAge = (value) => {
+  if (!value) return '';
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
+  const units = [
+    ['year', 31536000],
+    ['month', 2592000],
+    ['day', 86400],
+    ['hour', 3600],
+    ['minute', 60],
+  ];
+  for (const [label, size] of units) {
+    const amount = Math.floor(seconds / size);
+    if (amount >= 1) return `${amount} ${label}${amount === 1 ? '' : 's'}`;
+  }
+  return 'Just now';
+};
+
 async function getWishlistIds(env, customerId) {
   const data = await shopifyGraphql(
     env,
@@ -329,6 +346,7 @@ async function renderDashboard(env, session) {
         const product = productById.get(productId);
         const detail = customer.details.find((item) => item.productId === productId) || {};
         const trackedTime = detail.addedAt ? formatIndiaTime(detail.addedAt) : '';
+        const age = detail.addedAt ? formatAge(detail.addedAt) : '';
         const oldTime = formatIndiaTime(customer.idsUpdatedAt);
         return `
           <tr>
@@ -348,6 +366,7 @@ async function renderDashboard(env, session) {
               ${trackedTime ? escapeHtml(trackedTime) : 'Not tracked for old entry'}
               ${!trackedTime && oldTime ? `<small>Wishlist last changed: ${escapeHtml(oldTime)}</small>` : ''}
             </td>
+            <td>${age ? escapeHtml(age) : 'Unknown for old entry'}</td>
           </tr>`;
       })
     )
@@ -383,7 +402,7 @@ async function renderDashboard(env, session) {
           </div>
           ${
             rows
-              ? `<table><thead><tr><th>Customer</th><th>Product</th><th>Price</th><th>Wishlist time</th></tr></thead><tbody>${rows}</tbody></table>`
+              ? `<table><thead><tr><th>Customer</th><th>Product</th><th>Price</th><th>Wishlist time</th><th>Wishlist age</th></tr></thead><tbody>${rows}</tbody></table>`
               : '<div class="empty">No customer wishlist data found yet.</div>'
           }
         </main>
