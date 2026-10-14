@@ -12,6 +12,7 @@
   const productCache = new Map();
   const pendingProducts = new Map();
   let wishlistIds = [];
+  let mountTimer;
   const isProductPage = Boolean(context.productId);
 
   const style = document.createElement('style');
@@ -351,6 +352,11 @@
     }
   };
 
+  const scheduleMountAll = () => {
+    window.clearTimeout(mountTimer);
+    mountTimer = window.setTimeout(mountAll, 120);
+  };
+
   request('/ids')
     .then((data) => {
       wishlistIds = data?.productIds || [];
@@ -369,4 +375,8 @@
     window.setTimeout(mountProductPageCards, 1000);
     window.setTimeout(mountProductPageCards, 3000);
   }
+
+  new MutationObserver(scheduleMountAll).observe(document.body, { childList: true, subtree: true });
+  window.addEventListener('scroll', scheduleMountAll, { passive: true });
+  window.addEventListener('resize', scheduleMountAll);
 })();
