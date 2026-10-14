@@ -52,12 +52,15 @@
     }
 
     .wishlist-app-product-heart {
+      position: absolute;
+      z-index: 4;
+      top: 14px;
+      right: 14px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
       width: 42px;
       height: 42px;
-      margin: 12px 0;
       border: 1px solid rgba(0, 0, 0, 0.12);
       border-radius: 999px;
       background: rgba(255, 255, 255, 0.96);
@@ -66,6 +69,13 @@
       font-size: 22px;
       line-height: 1;
       box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+    }
+
+    @media (max-width: 749px) {
+      .wishlist-app-product-heart {
+        top: 10px;
+        right: 10px;
+      }
     }
 
     .wishlist-app-button[aria-pressed="true"],
@@ -272,8 +282,21 @@
     if (!context.productId || document.querySelector('.wishlist-app-product-heart')) return;
 
     const id = String(context.productId);
-    const form = document.querySelector('form[action*="/cart/add"]');
-    if (!form) return;
+    const mediaImages = [...document.querySelectorAll('img')]
+      .filter((image) => {
+        const rect = image.getBoundingClientRect();
+        return rect.width >= 240 && rect.height >= 240 && rect.top > 0;
+      })
+      .sort((a, b) => {
+        const aRect = a.getBoundingClientRect();
+        const bRect = b.getBoundingClientRect();
+        return bRect.width * bRect.height - aRect.width * aRect.height;
+      });
+    const image = mediaImages[0];
+    const media =
+      image?.closest('.product__media, .product-media, .product-gallery__media, .product-single__media, .media') ||
+      image?.parentElement;
+    if (!media) return;
 
     const heart = document.createElement('button');
     heart.type = 'button';
@@ -281,7 +304,11 @@
     heart.dataset.wishlistProductId = id;
     setPressed(heart, wishlistIds.includes(productGid(id)));
 
-    form.insertAdjacentElement('beforebegin', heart);
+    if (getComputedStyle(media).position === 'static') {
+      media.style.position = 'relative';
+    }
+
+    media.appendChild(heart);
     heart.addEventListener('click', () => toggleProduct(heart, id));
   };
 
