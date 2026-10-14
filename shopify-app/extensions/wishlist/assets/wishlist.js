@@ -10,7 +10,7 @@
   }
 
   const productCache = new Map();
-  const pendingProducts = new Set();
+  const pendingProducts = new Map();
   let wishlistIds = [];
   const isProductPage = Boolean(context.productId);
 
@@ -132,31 +132,42 @@
     document.querySelectorAll(`[data-wishlist-product-id="${id}"]`).forEach((item) => setPressed(item, isAdded));
   };
 
+  const setWishlistState = (id, gid, isAdded) => {
+    wishlistIds = isAdded
+      ? [...new Set([...wishlistIds, gid])]
+      : wishlistIds.filter((productId) => productId !== gid);
+    syncButtons(id, isAdded);
+  };
+
   const toggleProduct = async (button, id) => {
     const gid = productGid(id);
-    const isAdded = button.dataset.added === 'true';
-    const nextIds = isAdded
-      ? wishlistIds.filter((productId) => productId !== gid)
-      : [...new Set([...wishlistIds, gid])];
-    const previousIds = wishlistIds;
+    const fallback = wishlistIds.includes(gid);
+    const target = button.dataset.added !== 'true';
+    const pending = pendingProducts.get(gid);
+    setWishlistState(id, gid, target);
 
-    if (pendingProducts.has(gid)) return;
-    pendingProducts.add(gid);
-    wishlistIds = nextIds;
-    syncButtons(id, !isAdded);
+    if (pending) {
+      pending.target = target;
+      return;
+    }
+
+    const state = { target };
+    pendingProducts.set(gid, state);
 
     try {
-      const action = isAdded ? '/remove' : '/add';
-      await request(action, {
-        redirectOnAuth: true,
-        method: 'POST',
-        body: JSON.stringify({ productId: gid }),
-      });
+      let sent;
+      do {
+        sent = state.target;
+        await request(sent ? '/add' : '/remove', {
+          redirectOnAuth: true,
+          method: 'POST',
+          body: JSON.stringify({ productId: gid }),
+        });
+      } while (sent !== state.target);
     } catch {
-      wishlistIds = previousIds;
-      syncButtons(id, isAdded);
+      setWishlistState(id, gid, fallback);
     } finally {
-      pendingProducts.delete(gid);
+      if (pendingProducts.get(gid) === state) pendingProducts.delete(gid);
     }
   };
 
