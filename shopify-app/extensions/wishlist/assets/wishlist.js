@@ -147,19 +147,20 @@
   };
 
   const findProductCard = (link) =>
-    link.closest('.card-wrapper, .card, .product-card, .grid__item, li, article') || link.parentElement;
+    link.closest(
+      '.wishlist-card, .card-wrapper, .card, .product-card, .product-item, .product-grid-item, .grid__item, [class*="product-card"], [class*="product-item"], li, article'
+    ) || link.parentElement;
 
   const mountCardButtons = () => {
     const links = [...document.querySelectorAll('a[href*="/products/"]')];
-    const seenHandles = new Set();
 
     for (const link of links) {
       const handle = productHandleFromUrl(link.href);
-      if (!handle || seenHandles.has(handle)) continue;
-      seenHandles.add(handle);
+      if (!handle) continue;
 
       const card = findProductCard(link);
-      if (!card || card.querySelector('.wishlist-app-card-button')) continue;
+      if (!card || card.dataset.wishlistMounted === 'true') continue;
+      card.dataset.wishlistMounted = 'true';
 
       const button = document.createElement('button');
       button.type = 'button';
