@@ -123,6 +123,9 @@ const parseJsonArray = (value) => {
   }
 };
 
+const formatIndiaTime = (value) =>
+  value ? new Date(value).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : '';
+
 async function getWishlistIds(env, customerId) {
   const data = await shopifyGraphql(
     env,
@@ -272,7 +275,7 @@ async function getWishlistCustomers(env) {
               email
               phone
               createdAt
-              ids: metafield(namespace: $namespace, key: $key) { value }
+              ids: metafield(namespace: $namespace, key: $key) { value updatedAt }
               details: metafield(namespace: $namespace, key: $detailsKey) { value }
             }
           }
@@ -288,7 +291,14 @@ async function getWishlistCustomers(env) {
 
     for (const edge of data.customers?.edges || []) {
       const ids = parseJsonArray(edge.node.ids?.value);
-      if (ids.length) customers.push({ ...edge.node, ids, details: parseJsonArray(edge.node.details?.value) });
+      if (ids.length) {
+        customers.push({
+          ...edge.node,
+          ids,
+          idsUpdatedAt: edge.node.ids?.updatedAt || null,
+          details: parseJsonArray(edge.node.details?.value),
+        });
+      }
     }
 
     if (!data.customers?.pageInfo?.hasNextPage) break;
@@ -318,6 +328,8 @@ async function renderDashboard(env, session) {
       customer.ids.map((productId) => {
         const product = productById.get(productId);
         const detail = customer.details.find((item) => item.productId === productId) || {};
+        const trackedTime = detail.addedAt ? formatIndiaTime(detail.addedAt) : '';
+        const oldTime = formatIndiaTime(customer.idsUpdatedAt);
         return `
           <tr>
             <td>
@@ -332,7 +344,10 @@ async function renderDashboard(env, session) {
               <small>${escapeHtml(productId)}</small>
             </td>
             <td>${escapeHtml(product?.price || '')}</td>
-            <td>${detail.addedAt ? escapeHtml(new Date(detail.addedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })) : 'Unknown for old entries'}</td>
+            <td>
+              ${trackedTime ? escapeHtml(trackedTime) : 'Not tracked for old entry'}
+              ${!trackedTime && oldTime ? `<small>Wishlist last changed: ${escapeHtml(oldTime)}</small>` : ''}
+            </td>
           </tr>`;
       })
     )
