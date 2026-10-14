@@ -108,12 +108,17 @@
 
   const productGid = (id) => `gid://shopify/Product/${id}`;
 
-  const setPressed = (button, isAdded, labels = {}) => {
+  const buttonLabels = {
+    add: context.buttonLabel || 'Add to wishlist',
+    added: context.addedLabel || 'Added to wishlist',
+  };
+
+  const setPressed = (button, isAdded) => {
     button.dataset.added = isAdded ? 'true' : 'false';
     button.setAttribute('aria-pressed', isAdded ? 'true' : 'false');
 
-    if (labels.add && labels.added) {
-      button.textContent = isAdded ? labels.added : labels.add;
+    if (button.classList.contains('wishlist-app-button')) {
+      button.textContent = isAdded ? buttonLabels.added : buttonLabels.add;
       return;
     }
 
@@ -122,7 +127,7 @@
     button.setAttribute('title', isAdded ? 'Remove from wishlist' : 'Add to wishlist');
   };
 
-  const toggleProduct = async (button, id, labels) => {
+  const toggleProduct = async (button, id) => {
     const gid = productGid(id);
     const isAdded = button.dataset.added === 'true';
     button.disabled = true;
@@ -140,7 +145,7 @@
         : [...new Set([...wishlistIds, gid])];
 
       document.querySelectorAll(`[data-wishlist-product-id="${id}"]`).forEach((item) => {
-        setPressed(item, !isAdded, labels);
+        setPressed(item, !isAdded);
       });
     } catch {
       button.textContent = '!';
@@ -264,18 +269,13 @@
     button.className = 'wishlist-app-button';
     button.dataset.wishlistProductId = String(id);
 
-    const labels = {
-      add: context.buttonLabel || 'Add to wishlist',
-      added: context.addedLabel || 'Added to wishlist',
-    };
-
-    setPressed(button, wishlistIds.includes(gid), labels);
+    setPressed(button, wishlistIds.includes(gid));
 
     const form = document.querySelector('form[action*="/cart/add"]');
     if (!form || form.parentElement?.querySelector('.wishlist-app-button')) return;
     form.insertAdjacentElement('afterend', button);
 
-    button.addEventListener('click', () => toggleProduct(button, id, labels));
+    button.addEventListener('click', () => toggleProduct(button, id));
   };
 
   const mountProductPageHeart = () => {
