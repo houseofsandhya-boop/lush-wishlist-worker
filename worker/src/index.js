@@ -325,7 +325,7 @@ async function getWishlistCustomers(env) {
   return customers;
 }
 
-async function renderDashboard(env, session) {
+async function renderDashboard(env, session, customerId = '') {
   const storedShop = await env.WISHLIST_TOKENS.get(adminSessionKey(session || ''));
   if (storedShop !== env.SHOPIFY_SHOP) {
     return new Response('Unauthorized dashboard session. Open the app again from Shopify admin.', {
@@ -335,12 +335,26 @@ async function renderDashboard(env, session) {
   }
 
   const customers = await getWishlistCustomers(env);
-  const productIds = [...new Set(customers.flatMap((customer) => customer.ids))];
+  const selectedCustomer = customerId ? customers.find((customer) => customer.id === customerId) : null;
+  const visibleCustomers = selectedCustomer ? [selectedCustomer] : customers;
+  const productIds = [...new Set(visibleCustomers.flatMap((customer) => customer.ids))];
   const products = await getProducts(env, productIds);
   const productById = new Map(products.map((product) => [product.id, product]));
   const totalItems = customers.reduce((sum, customer) => sum + customer.ids.length, 0);
 
-  const rows = customers
+  const customerCards = customers
+    .map(
+      (customer) => `
+        <a class="customer-card" href="/dashboard?session=${encodeURIComponent(session)}&customer=${encodeURIComponent(customer.id)}">
+          <strong>${escapeHtml(customer.displayName || 'Unknown customer')}</strong>
+          <span>${escapeHtml(customer.email || '')}</span>
+          <span>${escapeHtml(customer.phone || '')}</span>
+          <b>${customer.ids.length} wishlist item${customer.ids.length === 1 ? '' : 's'}</b>
+        </a>`
+    )
+    .join('');
+
+  const rows = visibleCustomers
     .flatMap((customer) =>
       customer.ids.map((productId) => {
         const product = productById.get(productId);
@@ -350,12 +364,16 @@ async function renderDashboard(env, session) {
         const oldTime = formatIndiaTime(customer.idsUpdatedAt);
         return `
           <tr>
-            <td>
-              <strong>${escapeHtml(customer.displayName || 'Unknown customer')}</strong>
-              <small>${escapeHtml(customer.email || '')}</small>
-              <small>${escapeHtml(customer.phone || '')}</small>
-              <small>${escapeHtml(customer.id)}</small>
-            </td>
+            ${
+              selectedCustomer
+                ? ''
+                : `<td>
+                    <strong>${escapeHtml(customer.displayName || 'Unknown customer')}</strong>
+                    <small>${escapeHtml(customer.email || '')}</small>
+                    <small>${escapeHtml(customer.phone || '')}</small>
+                    <small>${escapeHtml(customer.id)}</small>
+                  </td>`
+            }
             <td>
               <strong>${escapeHtml(product?.title || productId)}</strong>
               ${product?.url ? `<a href="https://${escapeHtml(env.SHOPIFY_SHOP)}${escapeHtml(product.url)}" target="_blank" rel="noreferrer">View product</a>` : ''}
@@ -372,6 +390,21 @@ async function renderDashboard(env, session) {
     )
     .join('');
 
+  const tableHead = selectedCustomer
+    ? '<tr><th>Product</th><th>Price</th><th>Wishlist time</th><th>Wishlist age</th></tr>'
+    : '<tr><th>Customer</th><th>Product</th><th>Price</th><th>Wishlist time</th><th>Wishlist age</th></tr>';
+  const dashboardContent = selectedCustomer
+    ? `<div class="toolbar"><a class="back" href="/dashboard?session=${encodeURIComponent(session)}">Back to customers</a></div>
+       <h2>${escapeHtml(selectedCustomer.displayName || selectedCustomer.email || 'Customer wishlist')}</h2>
+       ${
+         rows
+           ? `<table><thead>${tableHead}</thead><tbody>${rows}</tbody></table>`
+           : '<div class="empty">No wishlist products found for this customer.</div>'
+       }`
+    : customerCards
+      ? `<div class="customer-grid">${customerCards}</div>`
+      : '<div class="empty">No customer wishlist data found yet.</div>';
+
   return new Response(
     `<!doctype html>
     <html>
@@ -386,6 +419,12 @@ async function renderDashboard(env, session) {
           .stats{display:flex;gap:12px;margin-bottom:18px}
           .stat{background:#fff;border:1px solid #ddd;border-radius:8px;padding:16px;min-width:160px}
           .stat strong{display:block;font-size:28px}
+          .customer-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
+          .customer-card{display:block;background:#fff;border:1px solid #ddd;border-radius:8px;padding:16px;text-decoration:none;color:inherit}
+          .customer-card:hover{border-color:#111}
+          .customer-card strong,.customer-card span,.customer-card b{display:block;margin-top:5px}
+          .toolbar{margin-bottom:16px}
+          .back{color:#111}
           table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #ddd}
           th,td{padding:12px;border-bottom:1px solid #eee;text-align:left;vertical-align:top}
           th{background:#fafafa;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
@@ -400,11 +439,7 @@ async function renderDashboard(env, session) {
             <div class="stat"><span>Customers</span><strong>${customers.length}</strong></div>
             <div class="stat"><span>Wishlist items</span><strong>${totalItems}</strong></div>
           </div>
-          ${
-            rows
-              ? `<table><thead><tr><th>Customer</th><th>Product</th><th>Price</th><th>Wishlist time</th><th>Wishlist age</th></tr></thead><tbody>${rows}</tbody></table>`
-              : '<div class="empty">No customer wishlist data found yet.</div>'
-          }
+          ${dashboardContent}
         </main>
       </body>
     </html>`,
@@ -495,7 +530,7 @@ async function handleRequest(request, env) {
   }
 
   if (url.pathname === '/dashboard') {
-    return renderDashboard(env, url.searchParams.get('session'));
+    return renderDashboard(env, url.searchParams.get('session'), url.searchParams.get('customer') || '');
   }
 
   if (!(await verifyProxySignature(url, env.SHOPIFY_API_SECRET))) {
