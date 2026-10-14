@@ -143,6 +143,8 @@ const formatAge = (value) => {
   return 'Just now';
 };
 
+const csvEscape = (value = '') => `"${String(value).replace(/"/g, '""')}"`;
+
 async function getWishlistIds(env, customerId) {
   const data = await shopifyGraphql(
     env,
@@ -325,7 +327,7 @@ async function getWishlistCustomers(env) {
   return customers;
 }
 
-async function renderDashboard(env, session, customerId = '') {
+async function renderDashboard(env, session, customerId = '', view = '') {
   const storedShop = await env.WISHLIST_TOKENS.get(adminSessionKey(session || ''));
   if (storedShop !== env.SHOPIFY_SHOP) {
     return new Response('Unauthorized dashboard session. Open the app again from Shopify admin.', {
@@ -335,8 +337,9 @@ async function renderDashboard(env, session, customerId = '') {
   }
 
   const customers = await getWishlistCustomers(env);
+  const isAllCustomersView = view === 'all';
   const selectedCustomer = customerId ? customers.find((customer) => customer.id === customerId) : null;
-  const visibleCustomers = selectedCustomer ? [selectedCustomer] : customers;
+  const visibleCustomers = selectedCustomer ? [selectedCustomer] : isAllCustomersView ? customers : [];
   const productIds = [...new Set(visibleCustomers.flatMap((customer) => customer.ids))];
   const products = await getProducts(env, productIds);
   const productById = new Map(products.map((product) => [product.id, product]));
@@ -396,11 +399,21 @@ async function renderDashboard(env, session, customerId = '') {
   const dashboardContent = selectedCustomer
     ? `<div class="toolbar"><a class="back" href="/dashboard?session=${encodeURIComponent(session)}">Back to customers</a></div>
        <h2>${escapeHtml(selectedCustomer.displayName || selectedCustomer.email || 'Customer wishlist')}</h2>
+       <p><a class="button-link" href="/dashboard.csv?session=${encodeURIComponent(session)}&customer=${encodeURIComponent(selectedCustomer.id)}">Export this customer CSV</a></p>
        ${
          rows
            ? `<table><thead>${tableHead}</thead><tbody>${rows}</tbody></table>`
            : '<div class="empty">No wishlist products found for this customer.</div>'
        }`
+    : isAllCustomersView
+      ? `<div class="toolbar"><a class="back" href="/dashboard?session=${encodeURIComponent(session)}">Back to customers</a></div>
+         <h2>All customers wishlist</h2>
+         <p><a class="button-link" href="/dashboard.csv?session=${encodeURIComponent(session)}&view=all">Export all CSV</a></p>
+         ${
+           rows
+             ? `<table><thead>${tableHead}</thead><tbody>${rows}</tbody></table>`
+             : '<div class="empty">No customer wishlist data found yet.</div>'
+         }`
     : customerCards
       ? `<div class="customer-grid">${customerCards}</div>`
       : '<div class="empty">No customer wishlist data found yet.</div>';
@@ -424,7 +437,8 @@ async function renderDashboard(env, session, customerId = '') {
           .customer-card:hover{border-color:#111}
           .customer-card strong,.customer-card span,.customer-card b{display:block;margin-top:5px}
           .toolbar{margin-bottom:16px}
-          .back{color:#111}
+          .back,.button-link{color:#111}
+          .button-link{display:inline-flex;background:#111;color:#fff;text-decoration:none;border-radius:6px;padding:10px 14px}
           table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #ddd}
           th,td{padding:12px;border-bottom:1px solid #eee;text-align:left;vertical-align:top}
           th{background:#fafafa;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
@@ -438,6 +452,7 @@ async function renderDashboard(env, session, customerId = '') {
           <div class="stats">
             <div class="stat"><span>Customers</span><strong>${customers.length}</strong></div>
             <div class="stat"><span>Wishlist items</span><strong>${totalItems}</strong></div>
+            <a class="stat" href="/dashboard?session=${encodeURIComponent(session)}&view=all"><span>All Customers</span><strong>View</strong></a>
           </div>
           ${dashboardContent}
         </main>
@@ -445,6 +460,71 @@ async function renderDashboard(env, session, customerId = '') {
     </html>`,
     { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } }
   );
+}
+
+async function exportDashboardCsv(env, session, customerId = '', view = '') {
+  const storedShop = await env.WISHLIST_TOKENS.get(adminSessionKey(session || ''));
+  if (storedShop !== env.SHOPIFY_SHOP) {
+    return new Response('Unauthorized dashboard session. Open the app again from Shopify admin.', {
+      status: 401,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+    });
+  }
+
+  const customers = await getWishlistCustomers(env);
+  const selectedCustomer = customerId ? customers.find((customer) => customer.id === customerId) : null;
+  const visibleCustomers = selectedCustomer ? [selectedCustomer] : view === 'all' ? customers : [];
+  const productIds = [...new Set(visibleCustomers.flatMap((customer) => customer.ids))];
+  const products = await getProducts(env, productIds);
+  const productById = new Map(products.map((product) => [product.id, product]));
+
+  const lines = [
+    [
+      'Customer Name',
+      'Customer Email',
+      'Customer Phone',
+      'Customer ID',
+      'Product Title',
+      'Product ID',
+      'Product URL',
+      'Price',
+      'Wishlist Time',
+      'Wishlist Age',
+      'Wishlist Last Changed',
+    ].map(csvEscape).join(','),
+  ];
+
+  for (const customer of visibleCustomers) {
+    for (const productId of customer.ids) {
+      const product = productById.get(productId);
+      const detail = customer.details.find((item) => item.productId === productId) || {};
+      lines.push(
+        [
+          customer.displayName || '',
+          customer.email || '',
+          customer.phone || '',
+          customer.id,
+          product?.title || productId,
+          productId,
+          product?.url ? `https://${env.SHOPIFY_SHOP}${product.url}` : '',
+          product?.price || '',
+          detail.addedAt ? formatIndiaTime(detail.addedAt) : '',
+          detail.addedAt ? formatAge(detail.addedAt) : '',
+          formatIndiaTime(customer.idsUpdatedAt),
+        ]
+          .map(csvEscape)
+          .join(',')
+      );
+    }
+  }
+
+  return new Response(lines.join('\n'), {
+    headers: {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': 'attachment; filename="wishlist-dashboard.csv"',
+      'Cache-Control': 'no-store',
+    },
+  });
 }
 
 async function handleAuthStart(request, env) {
@@ -530,7 +610,21 @@ async function handleRequest(request, env) {
   }
 
   if (url.pathname === '/dashboard') {
-    return renderDashboard(env, url.searchParams.get('session'), url.searchParams.get('customer') || '');
+    return renderDashboard(
+      env,
+      url.searchParams.get('session'),
+      url.searchParams.get('customer') || '',
+      url.searchParams.get('view') || ''
+    );
+  }
+
+  if (url.pathname === '/dashboard.csv') {
+    return exportDashboardCsv(
+      env,
+      url.searchParams.get('session'),
+      url.searchParams.get('customer') || '',
+      url.searchParams.get('view') || ''
+    );
   }
 
   if (!(await verifyProxySignature(url, env.SHOPIFY_API_SECRET))) {
