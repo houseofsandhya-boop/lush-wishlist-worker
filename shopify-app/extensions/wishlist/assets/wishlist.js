@@ -185,35 +185,6 @@
       '.wishlist-card, .card-wrapper, .card, .product-card, .product-item, .product-grid-item, .grid__item, [class*="product-card"], [class*="product-item"], li, article'
     ) || link.parentElement;
 
-  const syncProductPageHeartButtons = () => {
-    if (!context.productId) return;
-
-    const currentHandle = productHandleFromUrl(window.location.href);
-    const id = String(context.productId);
-    const isAdded = wishlistIds.includes(productGid(id));
-
-    document.querySelectorAll('.wishlist-app-card-button').forEach((button) => {
-      const card = findProductCard(button);
-      const productLink = card?.querySelector('a[href*="/products/"]');
-      const handle = productLink ? productHandleFromUrl(productLink.href) : null;
-      const mountedId = button.dataset.wishlistProductId;
-
-      if (handle && currentHandle && handle !== currentHandle) return;
-      if (mountedId && mountedId !== id) return;
-
-      button.dataset.wishlistProductId = id;
-      setPressed(button, isAdded);
-
-      if (button.dataset.wishlistProductPageBound === 'true') return;
-      button.dataset.wishlistProductPageBound = 'true';
-      button.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        toggleProduct(button, id);
-      });
-    });
-  };
-
   const mountCardButtons = () => {
     const links = [...document.querySelectorAll('a[href*="/products/"]')];
 
@@ -278,24 +249,52 @@
     button.addEventListener('click', () => toggleProduct(button, id));
   };
 
-  const mountProductPageHeart = () => {
-    if (!context.productId || document.querySelector('.wishlist-app-product-heart')) return;
+  const productMediaSelector =
+    '[data-product-media-gallery],media-gallery,.product__media-wrapper,.product-media-wrapper,.product-gallery,.product__media-list';
 
-    const id = String(context.productId);
-    const mediaImages = [...document.querySelectorAll('img')]
-      .filter((image) => {
-        const rect = image.getBoundingClientRect();
+  const hasLargeProductImage = (element) =>
+    [...element.querySelectorAll('img')].some((image) => {
+      const rect = image.getBoundingClientRect();
+      return rect.width >= 240 && rect.height >= 240;
+    });
+
+  const findProductMediaBlock = () => {
+    const candidates = [...document.querySelectorAll(productMediaSelector)].filter((element) => {
+      const rect = element.getBoundingClientRect();
+      return rect.width >= 240 && rect.height >= 240 && rect.top > -120 && hasLargeProductImage(element);
+    });
+
+    if (candidates.length) {
+      return candidates.sort((a, b) => {
+        const aRect = a.getBoundingClientRect();
+        const bRect = b.getBoundingClientRect();
+        return bRect.width * bRect.height - aRect.width * aRect.height;
+      })[0];
+    }
+
+    const image = [...document.querySelectorAll('img')]
+      .filter((item) => {
+        const rect = item.getBoundingClientRect();
         return rect.width >= 240 && rect.height >= 240 && rect.top > 0;
       })
       .sort((a, b) => {
         const aRect = a.getBoundingClientRect();
         const bRect = b.getBoundingClientRect();
         return bRect.width * bRect.height - aRect.width * aRect.height;
-      });
-    const image = mediaImages[0];
-    const media =
+      })[0];
+
+    return (
       image?.closest('.product__media, .product-media, .product-gallery__media, .product-single__media, .media') ||
-      image?.parentElement;
+      image?.parentElement ||
+      null
+    );
+  };
+
+  const mountProductPageHeart = () => {
+    if (!context.productId || document.querySelector('.wishlist-app-product-heart')) return;
+
+    const id = String(context.productId);
+    const media = findProductMediaBlock();
     if (!media) return;
 
     const heart = document.createElement('button');
