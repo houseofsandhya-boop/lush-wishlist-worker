@@ -52,13 +52,12 @@
     }
 
     .wishlist-app-product-heart {
-      float: right;
       display: inline-flex;
       align-items: center;
       justify-content: center;
       width: 42px;
       height: 42px;
-      margin-left: 12px;
+      margin: 12px 0;
       border: 1px solid rgba(0, 0, 0, 0.12);
       border-radius: 999px;
       background: rgba(255, 255, 255, 0.96);
@@ -273,19 +272,16 @@
     if (!context.productId || document.querySelector('.wishlist-app-product-heart')) return;
 
     const id = String(context.productId);
+    const form = document.querySelector('form[action*="/cart/add"]');
+    if (!form) return;
+
     const heart = document.createElement('button');
     heart.type = 'button';
     heart.className = 'wishlist-app-product-heart';
     heart.dataset.wishlistProductId = id;
     setPressed(heart, wishlistIds.includes(productGid(id)));
 
-    const title =
-      document.querySelector('h1') ||
-      document.querySelector('[class*="title"]') ||
-      document.querySelector('form[action*="/cart/add"]');
-
-    if (!title) return;
-    title.insertAdjacentElement('beforebegin', heart);
+    form.insertAdjacentElement('beforebegin', heart);
     heart.addEventListener('click', () => toggleProduct(heart, id));
   };
 
