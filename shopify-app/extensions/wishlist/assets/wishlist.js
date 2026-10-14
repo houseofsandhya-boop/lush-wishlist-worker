@@ -151,6 +151,35 @@
       '.wishlist-card, .card-wrapper, .card, .product-card, .product-item, .product-grid-item, .grid__item, [class*="product-card"], [class*="product-item"], li, article'
     ) || link.parentElement;
 
+  const syncProductPageHeartButtons = () => {
+    if (!context.productId) return;
+
+    const currentHandle = productHandleFromUrl(window.location.href);
+    const id = String(context.productId);
+    const isAdded = wishlistIds.includes(productGid(id));
+
+    document.querySelectorAll('.wishlist-app-card-button').forEach((button) => {
+      const card = findProductCard(button);
+      const productLink = card?.querySelector('a[href*="/products/"]');
+      const handle = productLink ? productHandleFromUrl(productLink.href) : null;
+      const mountedId = button.dataset.wishlistProductId;
+
+      if (handle && currentHandle && handle !== currentHandle) return;
+      if (mountedId && mountedId !== id) return;
+
+      button.dataset.wishlistProductId = id;
+      setPressed(button, isAdded);
+
+      if (button.dataset.wishlistProductPageBound === 'true') return;
+      button.dataset.wishlistProductPageBound = 'true';
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleProduct(button, id);
+      });
+    });
+  };
+
   const mountCardButtons = () => {
     const links = [...document.querySelectorAll('a[href*="/products/"]')];
 
@@ -191,6 +220,7 @@
         .then((product) => {
           button.dataset.wishlistProductId = String(product.id);
           setPressed(button, wishlistIds.includes(productGid(product.id)));
+          syncProductPageHeartButtons();
         })
         .catch(() => {});
     }
@@ -223,6 +253,7 @@
   const mountAll = () => {
     mountProductPageButton();
     mountCardButtons();
+    syncProductPageHeartButtons();
   };
 
   request('/ids')
@@ -234,6 +265,9 @@
       mountAll();
     });
 
-  const observer = new MutationObserver(() => mountCardButtons());
+  const observer = new MutationObserver(() => {
+    mountCardButtons();
+    syncProductPageHeartButtons();
+  });
   observer.observe(document.documentElement, { childList: true, subtree: true });
 })();
