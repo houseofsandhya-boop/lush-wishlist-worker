@@ -10,6 +10,7 @@
   }
 
   const productCache = new Map();
+  const pendingProducts = new Set();
   let wishlistIds = [];
   const isProductPage = Boolean(context.productId);
 
@@ -127,10 +128,22 @@
     button.setAttribute('title', isAdded ? 'Remove from wishlist' : 'Add to wishlist');
   };
 
+  const syncButtons = (id, isAdded) => {
+    document.querySelectorAll(`[data-wishlist-product-id="${id}"]`).forEach((item) => setPressed(item, isAdded));
+  };
+
   const toggleProduct = async (button, id) => {
     const gid = productGid(id);
     const isAdded = button.dataset.added === 'true';
-    button.disabled = true;
+    const nextIds = isAdded
+      ? wishlistIds.filter((productId) => productId !== gid)
+      : [...new Set([...wishlistIds, gid])];
+    const previousIds = wishlistIds;
+
+    if (pendingProducts.has(gid)) return;
+    pendingProducts.add(gid);
+    wishlistIds = nextIds;
+    syncButtons(id, !isAdded);
 
     try {
       const action = isAdded ? '/remove' : '/add';
@@ -139,18 +152,11 @@
         method: 'POST',
         body: JSON.stringify({ productId: gid }),
       });
-
-      wishlistIds = isAdded
-        ? wishlistIds.filter((productId) => productId !== gid)
-        : [...new Set([...wishlistIds, gid])];
-
-      document.querySelectorAll(`[data-wishlist-product-id="${id}"]`).forEach((item) => {
-        setPressed(item, !isAdded);
-      });
     } catch {
-      button.textContent = '!';
+      wishlistIds = previousIds;
+      syncButtons(id, isAdded);
     } finally {
-      button.disabled = false;
+      pendingProducts.delete(gid);
     }
   };
 
@@ -250,18 +256,12 @@
   };
 
   const productMediaSelector =
-    '[data-product-media-gallery],media-gallery,.product__media-wrapper,.product-media-wrapper,.product-gallery,.product__media-list';
-
-  const hasLargeProductImage = (element) =>
-    [...element.querySelectorAll('img')].some((image) => {
-      const rect = image.getBoundingClientRect();
-      return rect.width >= 240 && rect.height >= 240;
-    });
+    '[data-product-media-gallery],media-gallery,.product__media-wrapper,.product-media-wrapper,.product-gallery';
 
   const findProductMediaBlock = () => {
     const candidates = [...document.querySelectorAll(productMediaSelector)].filter((element) => {
       const rect = element.getBoundingClientRect();
-      return rect.width >= 240 && rect.height >= 240 && rect.top > -120 && hasLargeProductImage(element);
+      return rect.width >= 240 && rect.height >= 240 && rect.top > -120 && element.querySelector('img');
     });
 
     if (candidates.length) {
