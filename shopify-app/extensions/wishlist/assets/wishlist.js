@@ -179,9 +179,12 @@
     mountProductControls();
   };
 
-  const scheduleMount = (root = document) => {
-    cancelAnimationFrame(frame);
-    frame = requestAnimationFrame(() => mount(root));
+  const scheduleMount = () => {
+    if (frame) return;
+    frame = requestAnimationFrame(() => {
+      frame = 0;
+      mount();
+    });
   };
 
   document.addEventListener('click', (event) => {
@@ -194,6 +197,10 @@
 
   mount();
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => mount(), { once: true });
+  window.addEventListener('pageshow', () => {
+    mount();
+    syncAll();
+  });
 
   request('/ids')
     .then((data) => {
@@ -206,13 +213,22 @@
 
   new MutationObserver((mutations) => {
     for (const mutation of mutations) {
+      if (mutation.type === 'attributes') {
+        scheduleMount();
+        return;
+      }
       for (const node of mutation.addedNodes) {
         if (node.nodeType !== Node.ELEMENT_NODE || node.closest?.(cartSelector)) continue;
         if (node.matches?.(cardSelector) || node.querySelector?.(cardSelector)) {
-          scheduleMount(node.matches?.(cardSelector) ? node.parentElement : node);
+          scheduleMount();
           return;
         }
       }
     }
-  }).observe(document.body, { childList: true, subtree: true });
+  }).observe(document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['data-product-id'],
+  });
 })();
