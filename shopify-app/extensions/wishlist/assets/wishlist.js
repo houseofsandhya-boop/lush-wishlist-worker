@@ -19,6 +19,7 @@
     added: context.addedLabel || 'Added to wishlist',
   };
   const pending = new Map();
+  const mountQueue = new Set();
   let productMedia;
   let frame;
 
@@ -133,19 +134,21 @@
     return button;
   };
 
+  const mountCard = (card) => {
+    if (card.closest(cartSelector)) return;
+    const id = normalizeId(card.dataset.productId);
+    if (!id) return;
+    const buttons = [...card.querySelectorAll(':scope > .wishlist-app-card-button')];
+    const button = buttons.shift() || createButton('wishlist-app-card-button', id);
+    buttons.forEach((duplicate) => duplicate.remove());
+    button.dataset.wishlistProductId = id;
+    setPressed(button, wishlistIds.has(gid(id)));
+    if (!button.parentElement) card.appendChild(button);
+  };
+
   const mountCards = (root = document) => {
-    root.querySelectorAll(cardSelector).forEach((card) => {
-      if (card.closest(cartSelector)) return;
-      const id = normalizeId(card.dataset.productId);
-      if (!id) return;
-      const buttons = [...card.querySelectorAll(':scope > .wishlist-app-card-button')];
-      const button = buttons.shift() || createButton('wishlist-app-card-button', id);
-      buttons.forEach((duplicate) => duplicate.remove());
-      button.dataset.wishlistProductId = id;
-      setPressed(button, wishlistIds.has(gid(id)));
-      if (!button.parentElement) card.appendChild(button);
-      if (getComputedStyle(card).position === 'static') card.style.position = 'relative';
-    });
+    if (root.matches?.(cardSelector)) mountCard(root);
+    root.querySelectorAll?.(cardSelector).forEach(mountCard);
   };
 
   const findProductMedia = () => {
@@ -170,20 +173,19 @@
     if (!heart) heart = createButton('wishlist-app-product-heart', id);
     heart.dataset.wishlistProductId = id;
     setPressed(heart, wishlistIds.has(gid(id)));
-    if (getComputedStyle(media).position === 'static') media.style.position = 'relative';
+    media.classList.add('wishlist-app-media-host');
     if (heart.parentElement !== media) media.appendChild(heart);
   };
 
-  const mount = (root = document) => {
-    mountCards(root);
-    mountProductControls();
-  };
-
-  const scheduleMount = () => {
+  const scheduleMount = (root) => {
+    if (root) mountQueue.add(root);
     if (frame) return;
     frame = requestAnimationFrame(() => {
       frame = 0;
-      mount();
+      const roots = [...mountQueue];
+      mountQueue.clear();
+      roots.forEach(mountCards);
+      if (context.productId) mountProductControls();
     });
   };
 
@@ -195,11 +197,12 @@
     toggle(button);
   }, true);
 
-  mount();
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => mount(), { once: true });
+  scheduleMount(document);
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => scheduleMount(document), { once: true });
+  }
   window.addEventListener('pageshow', () => {
-    mount();
-    syncAll();
+    scheduleMount(document);
   });
 
   request('/ids')
@@ -214,14 +217,13 @@
   new MutationObserver((mutations) => {
     for (const mutation of mutations) {
       if (mutation.type === 'attributes') {
-        scheduleMount();
-        return;
+        scheduleMount(mutation.target);
+        continue;
       }
       for (const node of mutation.addedNodes) {
         if (node.nodeType !== Node.ELEMENT_NODE || node.closest?.(cartSelector)) continue;
         if (node.matches?.(cardSelector) || node.querySelector?.(cardSelector)) {
-          scheduleMount();
-          return;
+          scheduleMount(node);
         }
       }
     }
