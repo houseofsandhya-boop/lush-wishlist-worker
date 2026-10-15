@@ -543,7 +543,7 @@ async function handleAuthStart(request, env) {
   await env.WISHLIST_TOKENS.put(`state:${state}`, shop, { expirationTtl: 600 });
 
   const redirectUri = `${url.origin}/auth/callback`;
-  const scopes = 'read_customers,write_customers,read_products,write_app_proxy';
+  const scopes = 'read_customers,write_customers,read_products,read_orders,write_app_proxy';
   const authUrl = new URL(`https://${shop}/admin/oauth/authorize`);
   authUrl.searchParams.set('client_id', env.SHOPIFY_API_KEY);
   authUrl.searchParams.set('scope', scopes);

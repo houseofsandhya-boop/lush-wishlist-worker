@@ -16,7 +16,7 @@ direct_api_mode = "online"
 embedded_app_direct_api_access = true
 
 [access_scopes]
-scopes = "read_customers,write_customers,read_products,write_app_proxy"
+scopes = "read_customers,write_customers,read_products,read_orders,write_app_proxy"
 
 [app_proxy]
 url = "https://lush-wishlist-worker-second-store.houseofsandhya.workers.dev"
