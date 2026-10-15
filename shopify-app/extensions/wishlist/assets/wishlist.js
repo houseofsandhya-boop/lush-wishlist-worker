@@ -133,17 +133,21 @@
   };
 
   const setPressed = (button, isAdded) => {
-    button.dataset.added = isAdded ? 'true' : 'false';
-    button.setAttribute('aria-pressed', isAdded ? 'true' : 'false');
+    const pressed = isAdded ? 'true' : 'false';
+    if (button.dataset.added !== pressed) button.dataset.added = pressed;
+    if (button.getAttribute('aria-pressed') !== pressed) button.setAttribute('aria-pressed', pressed);
 
     if (button.classList.contains('wishlist-app-button')) {
-      button.textContent = isAdded ? buttonLabels.added : buttonLabels.add;
+      const label = isAdded ? buttonLabels.added : buttonLabels.add;
+      if (button.textContent !== label) button.textContent = label;
       return;
     }
 
-    button.textContent = isAdded ? '♥' : '♡';
-    button.setAttribute('aria-label', isAdded ? 'Remove from wishlist' : 'Add to wishlist');
-    button.setAttribute('title', isAdded ? 'Remove from wishlist' : 'Add to wishlist');
+    const icon = isAdded ? '♥' : '♡';
+    const label = isAdded ? 'Remove from wishlist' : 'Add to wishlist';
+    if (button.textContent !== icon) button.textContent = icon;
+    if (button.getAttribute('aria-label') !== label) button.setAttribute('aria-label', label);
+    if (button.getAttribute('title') !== label) button.setAttribute('title', label);
   };
 
   const syncButtons = (id, isAdded) => {
@@ -390,7 +394,18 @@
       const target = mutation.target.nodeType === Node.ELEMENT_NODE
         ? mutation.target
         : mutation.target.parentElement;
-      return !target || !target.closest(cartSurfaceSelector);
+      if (
+        target?.closest(
+          `${cartSurfaceSelector}, .wishlist-app-button, .wishlist-app-card-button, .wishlist-app-product-heart`
+        )
+      ) {
+        return false;
+      }
+
+      return [...mutation.addedNodes].some((node) => {
+        if (node.nodeType !== Node.ELEMENT_NODE) return true;
+        return !node.matches(cartSurfaceSelector) && !node.closest(cartSurfaceSelector);
+      });
     });
 
     if (hasNonCartMutation) scheduleMountAll();
