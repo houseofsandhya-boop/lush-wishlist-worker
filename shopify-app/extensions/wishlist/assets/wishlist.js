@@ -30,6 +30,8 @@
     '[role="dialog"][aria-label*="cart" i]',
   ].join(',');
 
+  if (isCartPage) return;
+
   const style = document.createElement('style');
   style.textContent = `
     .wishlist-app-button {
@@ -383,6 +385,17 @@
     mountTimer = window.setTimeout(mountAll, 120);
   };
 
+  const handleMutations = (mutations) => {
+    const hasNonCartMutation = mutations.some((mutation) => {
+      const target = mutation.target.nodeType === Node.ELEMENT_NODE
+        ? mutation.target
+        : mutation.target.parentElement;
+      return !target || !target.closest(cartSurfaceSelector);
+    });
+
+    if (hasNonCartMutation) scheduleMountAll();
+  };
+
   request('/ids')
     .then((data) => {
       wishlistIds = data?.productIds || [];
@@ -402,7 +415,7 @@
     window.setTimeout(mountProductPageCards, 3000);
   }
 
-  new MutationObserver(scheduleMountAll).observe(document.body, { childList: true, subtree: true });
+  new MutationObserver(handleMutations).observe(document.body, { childList: true, subtree: true });
   window.addEventListener('scroll', scheduleMountAll, { passive: true });
   window.addEventListener('resize', scheduleMountAll);
 })();
