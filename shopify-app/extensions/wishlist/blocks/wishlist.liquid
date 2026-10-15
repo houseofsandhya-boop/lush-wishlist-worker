@@ -3,6 +3,7 @@
     "buttonLabel": {{ block.settings.button_label | json }},
     "addedLabel": {{ block.settings.added_label | json }},
     "loginUrl": {{ routes.account_login_url | json }},
+    "customerId": {% if customer %}{{ customer.id | json }}{% else %}null{% endif %},
     "productId": {% if product %}{{ product.id | json }}{% else %}null{% endif %}
   }
 </script>
@@ -12,6 +13,7 @@
   "name": "Wishlist",
   "target": "body",
   "javascript": "wishlist.js",
+  "stylesheet": "wishlist.css",
   "settings": [
     {
       "type": "text",

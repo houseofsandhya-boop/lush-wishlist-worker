@@ -1,111 +1,48 @@
 (() => {
-  const contextEl = document.getElementById('wishlist-app-context');
-  if (!contextEl) return;
+  const contextNode = document.getElementById('wishlist-app-context');
+  if (!contextNode || location.pathname.replace(/\/+$/, '') === '/cart') return;
 
   let context;
   try {
-    context = JSON.parse(contextEl.textContent || '{}');
+    context = JSON.parse(contextNode.textContent || '{}');
   } catch {
     return;
   }
 
-  const productCache = new Map();
-  const pendingProducts = new Map();
-  let wishlistIds = [];
-  let mountTimer;
-  let productMediaBlock;
-  const isProductPage = Boolean(context.productId);
-  const isCartPage = window.location.pathname.replace(/\/+$/, '') === '/cart';
-  const cartSurfaceSelector = [
-    'cart-drawer',
-    'cart-items',
-    'mini-cart',
-    '[data-cart-drawer]',
-    '[data-cart-items]',
-    '[id*="cart-drawer" i]',
-    '[id*="cartdrawer" i]',
-    '[class*="cart-drawer" i]',
-    '[class*="cart__drawer" i]',
-    '[class*="mini-cart" i]',
-    '[class*="minicart" i]',
-    '[role="dialog"][aria-label*="cart" i]',
-  ].join(',');
+  const gidPrefix = 'gid://shopify/Product/';
+  const cardSelector = 'product-card[data-product-id],.product-card[data-product-id]';
+  const buttonSelector = '.wishlist-app-button,.wishlist-app-card-button,.wishlist-app-product-heart';
+  const cartSelector = 'cart-drawer,cart-items,mini-cart,[data-cart-drawer],[data-cart-items],[class*="cart-drawer" i],[class*="mini-cart" i]';
+  const cacheKey = `lush-wishlist:${context.customerId || 'guest'}`;
+  const labels = {
+    add: context.buttonLabel || 'Add to wishlist',
+    added: context.addedLabel || 'Added to wishlist',
+  };
+  const pending = new Map();
+  let productMedia;
+  let frame;
 
-  if (isCartPage) return;
+  const normalizeId = (value) => {
+    const match = String(value || '').match(/(\d+)$/);
+    return match ? match[1] : '';
+  };
+  const gid = (id) => `${gidPrefix}${id}`;
 
-  const style = document.createElement('style');
-  style.textContent = `
-    .wishlist-app-button {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      min-height: 44px;
-      width: 100%;
-      margin-top: 12px;
-      padding: 12px 18px;
-      border: 1px solid currentColor;
-      background: transparent;
-      color: inherit;
-      cursor: pointer;
-      font: inherit;
-      text-transform: inherit;
+  const loadCache = () => {
+    try {
+      const cached = JSON.parse(localStorage.getItem(cacheKey) || '{}');
+      return Date.now() - cached.savedAt < 86400000 && Array.isArray(cached.ids) ? cached.ids : [];
+    } catch {
+      return [];
     }
+  };
+  let wishlistIds = new Set(loadCache());
 
-    .wishlist-app-card-button {
-      position: absolute;
-      z-index: 3;
-      top: 10px;
-      right: 10px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 38px;
-      height: 38px;
-      border: 1px solid rgba(0, 0, 0, 0.12);
-      border-radius: 999px;
-      background: rgba(255, 255, 255, 0.92);
-      color: #111;
-      cursor: pointer;
-      font-size: 20px;
-      line-height: 1;
-      box-shadow: none;
-    }
-
-    .wishlist-app-product-heart {
-      position: absolute;
-      z-index: 4;
-      top: 14px;
-      right: 14px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 42px;
-      height: 42px;
-      border: 1px solid rgba(0, 0, 0, 0.12);
-      border-radius: 999px;
-      background: rgba(255, 255, 255, 0.96);
-      color: #111;
-      cursor: pointer;
-      font-size: 22px;
-      line-height: 1;
-      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
-    }
-
-    @media (max-width: 749px) {
-      .wishlist-app-product-heart {
-        top: 10px;
-        right: 10px;
-      }
-    }
-
-    .wishlist-app-button[aria-pressed="true"],
-    .wishlist-app-card-button[aria-pressed="true"],
-    .wishlist-app-product-heart[aria-pressed="true"] {
-      background: #111;
-      color: #fff;
-    }
-  `;
-  document.head.appendChild(style);
+  const saveCache = () => {
+    try {
+      localStorage.setItem(cacheKey, JSON.stringify({ ids: [...wishlistIds], savedAt: Date.now() }));
+    } catch {}
+  };
 
   const request = async (path, options = {}) => {
     const { redirectOnAuth = false, ...fetchOptions } = options;
@@ -114,69 +51,62 @@
       headers: { 'Content-Type': 'application/json' },
       ...fetchOptions,
     });
-
     if (response.status === 401) {
-      if (redirectOnAuth) {
-        window.location.href = context.loginUrl || '/account/login';
-      }
+      if (redirectOnAuth) location.href = context.loginUrl || '/account/login';
       return null;
     }
-
     if (!response.ok) throw new Error('Wishlist request failed');
     return response.json();
   };
 
-  const productGid = (id) => `gid://shopify/Product/${id}`;
-
-  const buttonLabels = {
-    add: context.buttonLabel || 'Add to wishlist',
-    added: context.addedLabel || 'Added to wishlist',
-  };
-
-  const setPressed = (button, isAdded) => {
-    const pressed = isAdded ? 'true' : 'false';
-    if (button.dataset.added !== pressed) button.dataset.added = pressed;
-    if (button.getAttribute('aria-pressed') !== pressed) button.setAttribute('aria-pressed', pressed);
-
+  const setPressed = (button, added) => {
+    const pressed = String(added);
+    button.dataset.added = pressed;
+    button.setAttribute('aria-pressed', pressed);
     if (button.classList.contains('wishlist-app-button')) {
-      const label = isAdded ? buttonLabels.added : buttonLabels.add;
-      if (button.textContent !== label) button.textContent = label;
+      button.textContent = added ? labels.added : labels.add;
       return;
     }
-
-    const icon = isAdded ? '♥' : '♡';
-    const label = isAdded ? 'Remove from wishlist' : 'Add to wishlist';
-    if (button.textContent !== icon) button.textContent = icon;
-    if (button.getAttribute('aria-label') !== label) button.setAttribute('aria-label', label);
-    if (button.getAttribute('title') !== label) button.setAttribute('title', label);
+    const label = added ? 'Remove from wishlist' : 'Add to wishlist';
+    button.textContent = added ? '♥' : '♡';
+    button.setAttribute('aria-label', label);
+    button.setAttribute('title', label);
   };
 
-  const syncButtons = (id, isAdded) => {
-    document.querySelectorAll(`[data-wishlist-product-id="${id}"]`).forEach((item) => setPressed(item, isAdded));
+  const syncButtons = (id) => {
+    const added = wishlistIds.has(gid(id));
+    document.querySelectorAll(`[data-wishlist-product-id="${id}"]`).forEach((button) => setPressed(button, added));
   };
 
-  const setWishlistState = (id, gid, isAdded) => {
-    wishlistIds = isAdded
-      ? [...new Set([...wishlistIds, gid])]
-      : wishlistIds.filter((productId) => productId !== gid);
-    syncButtons(id, isAdded);
+  const syncAll = () => {
+    document.querySelectorAll(buttonSelector).forEach((button) => {
+      const id = normalizeId(button.dataset.wishlistProductId);
+      if (id) setPressed(button, wishlistIds.has(gid(id)));
+    });
   };
 
-  const toggleProduct = async (button, id) => {
-    const gid = productGid(id);
-    const fallback = wishlistIds.includes(gid);
-    const target = button.dataset.added !== 'true';
-    const pending = pendingProducts.get(gid);
-    setWishlistState(id, gid, target);
+  const setState = (id, added) => {
+    if (added) wishlistIds.add(gid(id));
+    else wishlistIds.delete(gid(id));
+    saveCache();
+    syncButtons(id);
+  };
 
-    if (pending) {
-      pending.target = target;
+  const toggle = async (button) => {
+    const id = normalizeId(button.dataset.wishlistProductId);
+    if (!id) return;
+    const productGid = gid(id);
+    const fallback = wishlistIds.has(productGid);
+    const target = !fallback;
+    const active = pending.get(productGid);
+    setState(id, target);
+    if (active) {
+      active.target = target;
       return;
     }
 
     const state = { target };
-    pendingProducts.set(gid, state);
-
+    pending.set(productGid, state);
     try {
       let sent;
       do {
@@ -184,320 +114,105 @@
         await request(sent ? '/add' : '/remove', {
           redirectOnAuth: true,
           method: 'POST',
-          body: JSON.stringify({ productId: gid }),
+          body: JSON.stringify({ productId: productGid }),
         });
       } while (sent !== state.target);
     } catch {
-      setWishlistState(id, gid, fallback);
+      setState(id, fallback);
     } finally {
-      if (pendingProducts.get(gid) === state) pendingProducts.delete(gid);
+      if (pending.get(productGid) === state) pending.delete(productGid);
     }
   };
 
-  const productHandleFromUrl = (href) => {
-    try {
-      const url = new URL(href, window.location.origin);
-      const match = url.pathname.match(/\/products\/([^/?#]+)/);
-      return match ? decodeURIComponent(match[1]) : null;
-    } catch {
-      return null;
-    }
+  const createButton = (className, id) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = className;
+    button.dataset.wishlistProductId = id;
+    setPressed(button, wishlistIds.has(gid(id)));
+    return button;
   };
 
-  const fetchProductByHandle = async (handle) => {
-    if (productCache.has(handle)) return productCache.get(handle);
-
-    const promise = fetch(`/products/${encodeURIComponent(handle)}.js`, {
-      credentials: 'same-origin',
-    })
-      .then((response) => {
-        if (!response.ok) throw new Error('Product lookup failed');
-        return response.json();
-      })
-      .then((product) => ({ id: product.id, handle }));
-
-    productCache.set(handle, promise);
-    return promise;
-  };
-
-  const findProductCard = (link) =>
-    link.closest(
-      'product-card, .product-card, product-card-link, .wishlist-card, .card-wrapper, .card, .product-item, .product-grid-item, .grid__item, [class*="product-card"], [class*="product-item"], li, article'
-    ) || link.parentElement;
-
-  const isInsideCartSurface = (element) => isCartPage || Boolean(element.closest(cartSurfaceSelector));
-
-  const removeCartSurfaceButtons = () => {
-    document.querySelectorAll('.wishlist-app-card-button').forEach((button) => {
-      if (isInsideCartSurface(button)) button.remove();
+  const mountCards = (root = document) => {
+    root.querySelectorAll(cardSelector).forEach((card) => {
+      if (card.closest(cartSelector)) return;
+      const id = normalizeId(card.dataset.productId);
+      if (!id) return;
+      const buttons = [...card.querySelectorAll(':scope > .wishlist-app-card-button')];
+      const button = buttons.shift() || createButton('wishlist-app-card-button', id);
+      buttons.forEach((duplicate) => duplicate.remove());
+      button.dataset.wishlistProductId = id;
+      setPressed(button, wishlistIds.has(gid(id)));
+      if (!button.parentElement) card.appendChild(button);
+      if (getComputedStyle(card).position === 'static') card.style.position = 'relative';
     });
   };
 
-  const removeDuplicateCardButtons = () => {
-    document.querySelectorAll('product-recommendations .wishlist-app-card-button').forEach((button) => {
-      const parent = button.parentElement;
-      if (
-        parent &&
-        !parent.matches('product-card, .product-card') &&
-        parent.querySelector('product-card, .product-card')
-      ) {
-        button.remove();
-      }
-    });
-
-    document
-      .querySelectorAll(
-        'product-card, .product-card, .wishlist-card, .card-wrapper, .product-item, .product-grid-item, .resource-list__item'
-      )
-      .forEach((card) => {
-        const buttons = [...card.querySelectorAll('.wishlist-app-card-button')];
-        if (buttons.length < 2) return;
-        const preferred = buttons.find((button) =>
-          button.parentElement?.matches('product-card, .product-card')
-        ) || buttons[0];
-        buttons.forEach((button) => {
-          if (button !== preferred) button.remove();
-        });
-      });
+  const findProductMedia = () => {
+    if (productMedia?.isConnected) return productMedia;
+    const selector = '[data-product-media-gallery],media-gallery,.product__media-wrapper,.product-media-wrapper,.product-gallery';
+    productMedia = [...document.querySelectorAll(selector)]
+      .filter((element) => element.querySelector('img') && !element.closest('product-recommendations,.product-recommendations'))
+      .sort((a, b) => b.getBoundingClientRect().width - a.getBoundingClientRect().width)[0];
+    return productMedia;
   };
 
-  const mountCardButtons = (root = document, minTop = 0) => {
-    if (isCartPage || (root !== document && isInsideCartSurface(root))) return;
-    const links = [...root.querySelectorAll('a[href*="/products/"]')];
-
-    for (const link of links) {
-      if (isInsideCartSurface(link)) continue;
-      if (minTop && link.getBoundingClientRect().top + window.scrollY < minTop) continue;
-      const handle = productHandleFromUrl(link.href);
-      if (!handle) continue;
-
-      const card = findProductCard(link);
-      if (!card) continue;
-      const existing = card.querySelector('.wishlist-app-card-button');
-      if (existing) {
-        existing.dataset.wishlistHandle = handle;
-        card.dataset.wishlistMounted = 'true';
-        fetchProductByHandle(handle)
-          .then((product) => {
-            if (!existing.isConnected || existing.dataset.wishlistHandle !== handle) return;
-            existing.dataset.wishlistProductId = String(product.id);
-            setPressed(existing, wishlistIds.includes(productGid(product.id)));
-          })
-          .catch(() => {});
-        continue;
-      }
-      if (card.dataset.wishlistMounted === 'true') delete card.dataset.wishlistMounted;
-      card.dataset.wishlistMounted = 'true';
-
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'wishlist-app-card-button';
-      button.dataset.wishlistHandle = handle;
-      button.textContent = '♡';
-      button.setAttribute('aria-label', 'Add to wishlist');
-
-      if (getComputedStyle(card).position === 'static') {
-        card.style.position = 'relative';
-      }
-
-      button.addEventListener('click', async (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-
-        try {
-          const requestedHandle = button.dataset.wishlistHandle;
-          const product = await fetchProductByHandle(requestedHandle);
-          if (!button.isConnected || button.dataset.wishlistHandle !== requestedHandle) return;
-          button.dataset.wishlistProductId = String(product.id);
-          await toggleProduct(button, product.id);
-        } catch {
-          button.textContent = '!';
-        }
-      });
-
-      card.appendChild(button);
-
-      fetchProductByHandle(handle)
-        .then((product) => {
-          if (!button.isConnected || button.dataset.wishlistHandle !== handle) return;
-          button.dataset.wishlistProductId = String(product.id);
-          setPressed(button, wishlistIds.includes(productGid(product.id)));
-        })
-        .catch(() => {});
-    }
-  };
-
-  const mountProductPageCards = () => {
-    const roots = [
-      ...document.querySelectorAll(
-        'product-recommendations,.product-recommendations,[id*="recommend"],[class*="recommend"]'
-      ),
-    ];
-    document.querySelectorAll('h2,h3').forEach((heading) => {
-      if (!/you may also like|recommend/i.test(heading.textContent || '')) return;
-      const section = heading.closest('section,.shopify-section,div');
-      if (section) roots.push(section);
-      mountCardButtons(document, heading.getBoundingClientRect().bottom + window.scrollY);
-    });
-    [...new Set(roots)].forEach((root) => mountCardButtons(root));
-  };
-
-  const mountProductPageButton = () => {
-    if (!context.productId) return;
-
-    const id = context.productId;
-    const gid = productGid(id);
+  const mountProductControls = () => {
+    const id = normalizeId(context.productId);
+    if (!id) return;
     const form = document.querySelector('form[action*="/cart/add"]');
-    if (!form) return;
-
-    const container = form.parentElement;
-    let button = container?.querySelector('.wishlist-app-button');
-    const isNew = !button;
-    if (isNew) {
-      button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'wishlist-app-button';
-      button.addEventListener('click', () => toggleProduct(button, id));
-      form.insertAdjacentElement('afterend', button);
+    if (form && !form.parentElement?.querySelector('.wishlist-app-button')) {
+      form.insertAdjacentElement('afterend', createButton('wishlist-app-button', id));
     }
-
-    button.dataset.wishlistProductId = String(id);
-    setPressed(button, wishlistIds.includes(gid));
-  };
-
-  const productMediaSelector =
-    '[data-product-media-gallery],media-gallery,.product__media-wrapper,.product-media-wrapper,.product-gallery';
-
-  const findProductMediaBlock = () => {
-    if (productMediaBlock?.isConnected) return productMediaBlock;
-
-    const candidates = [...document.querySelectorAll(productMediaSelector)].filter((element) => {
-      const rect = element.getBoundingClientRect();
-      return (
-        rect.width >= 240 &&
-        rect.height >= 240 &&
-        element.querySelector('img') &&
-        !element.closest('product-recommendations, .product-recommendations, product-card, .product-card')
-      );
-    });
-
-    if (candidates.length) {
-      productMediaBlock = candidates.sort((a, b) => {
-        const aRect = a.getBoundingClientRect();
-        const bRect = b.getBoundingClientRect();
-        return bRect.width * bRect.height - aRect.width * aRect.height;
-      })[0];
-      return productMediaBlock;
-    }
-
-    const image = [...document.querySelectorAll('img')]
-      .filter((item) => {
-        const rect = item.getBoundingClientRect();
-        return (
-          rect.width >= 240 &&
-          rect.height >= 240 &&
-          !item.closest(
-            'product-recommendations, .product-recommendations, product-card, .product-card, cart-drawer, [data-cart-drawer]'
-          )
-        );
-      })
-      .sort((a, b) => {
-        const aRect = a.getBoundingClientRect();
-        const bRect = b.getBoundingClientRect();
-        return bRect.width * bRect.height - aRect.width * aRect.height;
-      })[0];
-
-    productMediaBlock = (
-      image?.closest('.product__media, .product-media, .product-gallery__media, .product-single__media, .media') ||
-      image?.parentElement ||
-      null
-    );
-    return productMediaBlock;
-  };
-
-  const mountProductPageHeart = () => {
-    if (!context.productId) return;
-
-    const id = String(context.productId);
-    const media = findProductMediaBlock();
+    const media = findProductMedia();
     if (!media) return;
-
-    const heart = document.querySelector('.wishlist-app-product-heart') || document.createElement('button');
-    const isNew = !heart.parentElement;
-    if (isNew) {
-      heart.type = 'button';
-      heart.className = 'wishlist-app-product-heart';
-      heart.addEventListener('click', () => toggleProduct(heart, id));
-    }
+    let heart = document.querySelector('.wishlist-app-product-heart');
+    if (!heart) heart = createButton('wishlist-app-product-heart', id);
     heart.dataset.wishlistProductId = id;
-    setPressed(heart, wishlistIds.includes(productGid(id)));
-
-    if (getComputedStyle(media).position === 'static') {
-      media.style.position = 'relative';
-    }
-
+    setPressed(heart, wishlistIds.has(gid(id)));
+    if (getComputedStyle(media).position === 'static') media.style.position = 'relative';
     if (heart.parentElement !== media) media.appendChild(heart);
   };
 
-  const mountAll = () => {
-    removeCartSurfaceButtons();
-    removeDuplicateCardButtons();
-    mountProductPageHeart();
-    mountProductPageButton();
-    if (isProductPage) {
-      mountProductPageCards();
-    } else {
-      mountCardButtons();
-    }
+  const mount = (root = document) => {
+    mountCards(root);
+    mountProductControls();
   };
 
-  const scheduleMountAll = () => {
-    window.clearTimeout(mountTimer);
-    mountTimer = window.setTimeout(mountAll, 120);
+  const scheduleMount = (root = document) => {
+    cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(() => mount(root));
   };
 
-  const handleMutations = (mutations) => {
-    const hasNonCartMutation = mutations.some((mutation) => {
-      const target = mutation.target.nodeType === Node.ELEMENT_NODE
-        ? mutation.target
-        : mutation.target.parentElement;
-      if (
-        target?.closest(
-          `${cartSurfaceSelector}, .wishlist-app-button, .wishlist-app-card-button, .wishlist-app-product-heart`
-        )
-      ) {
-        return false;
-      }
+  document.addEventListener('click', (event) => {
+    const button = event.target.closest(buttonSelector);
+    if (!button) return;
+    event.preventDefault();
+    event.stopPropagation();
+    toggle(button);
+  }, true);
 
-      return [...mutation.addedNodes].some((node) => {
-        if (node.nodeType !== Node.ELEMENT_NODE) return true;
-        return !node.matches(cartSurfaceSelector) && !node.closest(cartSurfaceSelector);
-      });
-    });
-
-    if (hasNonCartMutation) scheduleMountAll();
-  };
+  mount();
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => mount(), { once: true });
 
   request('/ids')
     .then((data) => {
-      wishlistIds = data?.productIds || [];
-      mountAll();
+      if (!data) return;
+      wishlistIds = new Set(data.productIds || []);
+      saveCache();
+      syncAll();
     })
-    .catch(() => {
-      mountAll();
-    });
+    .catch(() => {});
 
-  if (!isProductPage) {
-    window.setTimeout(mountCardButtons, 1000);
-    window.setTimeout(mountCardButtons, 3000);
-  } else {
-    window.setTimeout(mountProductPageHeart, 1000);
-    window.setTimeout(mountProductPageHeart, 3000);
-    window.setTimeout(mountProductPageCards, 1000);
-    window.setTimeout(mountProductPageCards, 3000);
-  }
-
-  new MutationObserver(handleMutations).observe(document.body, { childList: true, subtree: true });
-  window.addEventListener('scroll', scheduleMountAll, { passive: true });
-  window.addEventListener('resize', scheduleMountAll);
+  new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      for (const node of mutation.addedNodes) {
+        if (node.nodeType !== Node.ELEMENT_NODE || node.closest?.(cartSelector)) continue;
+        if (node.matches?.(cardSelector) || node.querySelector?.(cardSelector)) {
+          scheduleMount(node.matches?.(cardSelector) ? node.parentElement : node);
+          return;
+        }
+      }
+    }
+  }).observe(document.body, { childList: true, subtree: true });
 })();
