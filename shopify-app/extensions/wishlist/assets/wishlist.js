@@ -13,6 +13,7 @@
   const pendingProducts = new Map();
   let wishlistIds = [];
   let mountTimer;
+  let productMediaBlock;
   const isProductPage = Boolean(context.productId);
   const isCartPage = window.location.pathname.replace(/\/+$/, '') === '/cart';
   const cartSurfaceSelector = [
@@ -368,23 +369,37 @@
     '[data-product-media-gallery],media-gallery,.product__media-wrapper,.product-media-wrapper,.product-gallery';
 
   const findProductMediaBlock = () => {
+    if (productMediaBlock?.isConnected) return productMediaBlock;
+
     const candidates = [...document.querySelectorAll(productMediaSelector)].filter((element) => {
       const rect = element.getBoundingClientRect();
-      return rect.width >= 240 && rect.height >= 240 && rect.top > -120 && element.querySelector('img');
+      return (
+        rect.width >= 240 &&
+        rect.height >= 240 &&
+        element.querySelector('img') &&
+        !element.closest('product-recommendations, .product-recommendations, product-card, .product-card')
+      );
     });
 
     if (candidates.length) {
-      return candidates.sort((a, b) => {
+      productMediaBlock = candidates.sort((a, b) => {
         const aRect = a.getBoundingClientRect();
         const bRect = b.getBoundingClientRect();
         return bRect.width * bRect.height - aRect.width * aRect.height;
       })[0];
+      return productMediaBlock;
     }
 
     const image = [...document.querySelectorAll('img')]
       .filter((item) => {
         const rect = item.getBoundingClientRect();
-        return rect.width >= 240 && rect.height >= 240 && rect.top > 0;
+        return (
+          rect.width >= 240 &&
+          rect.height >= 240 &&
+          !item.closest(
+            'product-recommendations, .product-recommendations, product-card, .product-card, cart-drawer, [data-cart-drawer]'
+          )
+        );
       })
       .sort((a, b) => {
         const aRect = a.getBoundingClientRect();
@@ -392,11 +407,12 @@
         return bRect.width * bRect.height - aRect.width * aRect.height;
       })[0];
 
-    return (
+    productMediaBlock = (
       image?.closest('.product__media, .product-media, .product-gallery__media, .product-single__media, .media') ||
       image?.parentElement ||
       null
     );
+    return productMediaBlock;
   };
 
   const mountProductPageHeart = () => {
