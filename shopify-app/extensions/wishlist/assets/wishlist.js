@@ -221,7 +221,7 @@
 
   const findProductCard = (link) =>
     link.closest(
-      '.wishlist-card, .card-wrapper, .card, .product-card, .product-item, .product-grid-item, .grid__item, [class*="product-card"], [class*="product-item"], li, article'
+      'product-card, .product-card, product-card-link, .wishlist-card, .card-wrapper, .card, .product-item, .product-grid-item, .grid__item, [class*="product-card"], [class*="product-item"], li, article'
     ) || link.parentElement;
 
   const isInsideCartSurface = (element) => isCartPage || Boolean(element.closest(cartSurfaceSelector));
@@ -230,6 +230,15 @@
     document.querySelectorAll('.wishlist-app-card-button').forEach((button) => {
       if (isInsideCartSurface(button)) button.remove();
     });
+  };
+
+  const removeDuplicateCardButtons = () => {
+    document
+      .querySelectorAll('product-card, .product-card, .wishlist-card, .card-wrapper, .product-item, .product-grid-item')
+      .forEach((card) => {
+        const buttons = [...card.querySelectorAll('.wishlist-app-card-button')];
+        buttons.slice(1).forEach((button) => button.remove());
+      });
   };
 
   const mountCardButtons = (root = document, minTop = 0) => {
@@ -243,12 +252,26 @@
       if (!handle) continue;
 
       const card = findProductCard(link);
-      if (!card || card.dataset.wishlistMounted === 'true') continue;
+      if (!card) continue;
+      const existing = card.querySelector('.wishlist-app-card-button');
+      if (existing) {
+        existing.dataset.wishlistHandle = handle;
+        card.dataset.wishlistMounted = 'true';
+        fetchProductByHandle(handle)
+          .then((product) => {
+            existing.dataset.wishlistProductId = String(product.id);
+            setPressed(existing, wishlistIds.includes(productGid(product.id)));
+          })
+          .catch(() => {});
+        continue;
+      }
+      if (card.dataset.wishlistMounted === 'true') delete card.dataset.wishlistMounted;
       card.dataset.wishlistMounted = 'true';
 
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'wishlist-app-card-button';
+      button.dataset.wishlistHandle = handle;
       button.textContent = '♡';
       button.setAttribute('aria-label', 'Add to wishlist');
 
@@ -261,7 +284,7 @@
         event.stopPropagation();
 
         try {
-          const product = await fetchProductByHandle(handle);
+          const product = await fetchProductByHandle(button.dataset.wishlistHandle);
           button.dataset.wishlistProductId = String(product.id);
           await toggleProduct(button, product.id);
         } catch {
@@ -379,6 +402,7 @@
 
   const mountAll = () => {
     removeCartSurfaceButtons();
+    removeDuplicateCardButtons();
     mountProductPageHeart();
     mountProductPageButton();
     if (isProductPage) {
