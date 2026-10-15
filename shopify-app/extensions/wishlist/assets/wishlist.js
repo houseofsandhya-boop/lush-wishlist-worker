@@ -233,11 +233,30 @@
   };
 
   const removeDuplicateCardButtons = () => {
+    document.querySelectorAll('product-recommendations .wishlist-app-card-button').forEach((button) => {
+      const parent = button.parentElement;
+      if (
+        parent &&
+        !parent.matches('product-card, .product-card') &&
+        parent.querySelector('product-card, .product-card')
+      ) {
+        button.remove();
+      }
+    });
+
     document
-      .querySelectorAll('product-card, .product-card, .wishlist-card, .card-wrapper, .product-item, .product-grid-item')
+      .querySelectorAll(
+        'product-card, .product-card, .wishlist-card, .card-wrapper, .product-item, .product-grid-item, .resource-list__item'
+      )
       .forEach((card) => {
         const buttons = [...card.querySelectorAll('.wishlist-app-card-button')];
-        buttons.slice(1).forEach((button) => button.remove());
+        if (buttons.length < 2) return;
+        const preferred = buttons.find((button) =>
+          button.parentElement?.matches('product-card, .product-card')
+        ) || buttons[0];
+        buttons.forEach((button) => {
+          if (button !== preferred) button.remove();
+        });
       });
   };
 
@@ -259,6 +278,7 @@
         card.dataset.wishlistMounted = 'true';
         fetchProductByHandle(handle)
           .then((product) => {
+            if (!existing.isConnected || existing.dataset.wishlistHandle !== handle) return;
             existing.dataset.wishlistProductId = String(product.id);
             setPressed(existing, wishlistIds.includes(productGid(product.id)));
           })
@@ -284,7 +304,9 @@
         event.stopPropagation();
 
         try {
-          const product = await fetchProductByHandle(button.dataset.wishlistHandle);
+          const requestedHandle = button.dataset.wishlistHandle;
+          const product = await fetchProductByHandle(requestedHandle);
+          if (!button.isConnected || button.dataset.wishlistHandle !== requestedHandle) return;
           button.dataset.wishlistProductId = String(product.id);
           await toggleProduct(button, product.id);
         } catch {
@@ -296,6 +318,7 @@
 
       fetchProductByHandle(handle)
         .then((product) => {
+          if (!button.isConnected || button.dataset.wishlistHandle !== handle) return;
           button.dataset.wishlistProductId = String(product.id);
           setPressed(button, wishlistIds.includes(productGid(product.id)));
         })
