@@ -14,6 +14,21 @@
   let wishlistIds = [];
   let mountTimer;
   const isProductPage = Boolean(context.productId);
+  const isCartPage = window.location.pathname.replace(/\/+$/, '') === '/cart';
+  const cartSurfaceSelector = [
+    'cart-drawer',
+    'cart-items',
+    'mini-cart',
+    '[data-cart-drawer]',
+    '[data-cart-items]',
+    '[id*="cart-drawer" i]',
+    '[id*="cartdrawer" i]',
+    '[class*="cart-drawer" i]',
+    '[class*="cart__drawer" i]',
+    '[class*="mini-cart" i]',
+    '[class*="minicart" i]',
+    '[role="dialog"][aria-label*="cart" i]',
+  ].join(',');
 
   const style = document.createElement('style');
   style.textContent = `
@@ -203,10 +218,20 @@
       '.wishlist-card, .card-wrapper, .card, .product-card, .product-item, .product-grid-item, .grid__item, [class*="product-card"], [class*="product-item"], li, article'
     ) || link.parentElement;
 
+  const isInsideCartSurface = (element) => isCartPage || Boolean(element.closest(cartSurfaceSelector));
+
+  const removeCartSurfaceButtons = () => {
+    document.querySelectorAll('.wishlist-app-card-button').forEach((button) => {
+      if (isInsideCartSurface(button)) button.remove();
+    });
+  };
+
   const mountCardButtons = (root = document, minTop = 0) => {
+    if (isCartPage || (root !== document && isInsideCartSurface(root))) return;
     const links = [...root.querySelectorAll('a[href*="/products/"]')];
 
     for (const link of links) {
+      if (isInsideCartSurface(link)) continue;
       if (minTop && link.getBoundingClientRect().top + window.scrollY < minTop) continue;
       const handle = productHandleFromUrl(link.href);
       if (!handle) continue;
@@ -343,6 +368,7 @@
   };
 
   const mountAll = () => {
+    removeCartSurfaceButtons();
     mountProductPageHeart();
     mountProductPageButton();
     if (isProductPage) {
