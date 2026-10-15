@@ -11,6 +11,10 @@ automatically_update_urls_on_dev = true
 [webhooks]
 api_version = "2026-10"
 
+[[webhooks.subscriptions]]
+topics = ["orders/paid", "orders/cancelled"]
+uri = "https://lush-wishlist-worker-second-store.houseofsandhya.workers.dev/webhooks/orders"
+
 [access.admin]
 direct_api_mode = "online"
 embedded_app_direct_api_access = true

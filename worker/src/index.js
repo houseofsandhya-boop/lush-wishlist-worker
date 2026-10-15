@@ -12,6 +12,9 @@ const badRequest = (message) => json({ error: message }, 400);
 const bytesToHex = (buffer) =>
   [...new Uint8Array(buffer)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 
+const bytesToBase64 = (buffer) =>
+  btoa(String.fromCharCode(...new Uint8Array(buffer)));
+
 const timingSafeEqual = (a, b) => {
   if (a.length !== b.length) return false;
   let result = 0;
@@ -31,6 +34,18 @@ const hmacHex = async (message, secret) => {
   );
   const digest = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(message));
   return bytesToHex(digest);
+};
+
+const hmacBase64 = async (message, secret) => {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret.trim()),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const digest = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(message));
+  return bytesToBase64(digest);
 };
 
 const randomHex = (bytes = 16) => bytesToHex(crypto.getRandomValues(new Uint8Array(bytes)));
@@ -71,9 +86,16 @@ async function verifyOAuthHmac(url, secret) {
   return timingSafeEqual(await hmacHex(message, secret), hmac);
 }
 
+async function verifyWebhookHmac(rawBody, signature, secret) {
+  if (!signature) return false;
+  return timingSafeEqual(await hmacBase64(rawBody, secret), signature);
+}
+
 const tokenKey = (shop) => `shop:${shop}:admin_token`;
 const detailsKey = (env) => `${env.WISHLIST_KEY || 'wishlist'}_details`;
 const adminSessionKey = (session) => `admin_session:${session}`;
+const customerPurchaseKey = (customerId) => `customer_purchase:${customerId}`;
+const webhookDeliveryKey = (webhookId) => `webhook_delivery:${webhookId}`;
 
 async function getAdminToken(env) {
   const token = await env.WISHLIST_TOKENS?.get(tokenKey(env.SHOPIFY_SHOP));
@@ -144,6 +166,144 @@ const formatAge = (value) => {
 };
 
 const csvEscape = (value = '') => `"${String(value).replace(/"/g, '""')}"`;
+
+const legacyId = (gid = '') => String(gid).split('/').pop();
+
+const paidStatuses = new Set(['PAID', 'PARTIALLY_PAID', 'PARTIALLY_REFUNDED', 'REFUNDED']);
+
+const normalizePurchase = (order) => ({
+  orderId: order.id,
+  orderName: order.name || '',
+  purchasedAt: order.processedAt || order.createdAt || '',
+  cancelledAt: order.cancelledAt || null,
+  financialStatus: order.displayFinancialStatus || 'PAID',
+  productIds: [...new Set((order.productIds || []).filter(Boolean))],
+});
+
+async function getStoredPurchases(env, customerId) {
+  const value = await env.WISHLIST_TOKENS.get(customerPurchaseKey(legacyId(customerId)));
+  return parseJsonArray(value).map(normalizePurchase);
+}
+
+async function getRecentPurchases(env, customerId) {
+  const data = await shopifyGraphql(
+    env,
+    `query CustomerPurchases($id: ID!) {
+      customer(id: $id) {
+        orders(first: 100, reverse: true) {
+          nodes {
+            id
+            name
+            processedAt
+            cancelledAt
+            displayFinancialStatus
+            lineItems(first: 100) {
+              nodes { product { id } }
+            }
+          }
+        }
+      }
+    }`,
+    { id: customerId }
+  );
+
+  return (data.customer?.orders?.nodes || []).map((order) =>
+    normalizePurchase({
+      ...order,
+      productIds: (order.lineItems?.nodes || []).map((item) => item.product?.id),
+    })
+  );
+}
+
+async function getCustomerPurchases(env, customerId) {
+  const stored = await getStoredPurchases(env, customerId);
+  let recent = [];
+  try {
+    recent = await getRecentPurchases(env, customerId);
+  } catch {
+    recent = [];
+  }
+
+  const byOrderId = new Map(stored.map((order) => [order.orderId, order]));
+  for (const order of recent) byOrderId.set(order.orderId, order);
+  return [...byOrderId.values()];
+}
+
+const getPurchaseStatus = (purchases, productId, addedAt) => {
+  const addedTime = addedAt ? new Date(addedAt).getTime() : null;
+  const matches = purchases
+    .filter((order) => order.productIds.includes(productId))
+    .filter((order) => !addedTime || new Date(order.purchasedAt).getTime() >= addedTime)
+    .sort((a, b) => new Date(a.purchasedAt) - new Date(b.purchasedAt));
+  const order = matches.find((item) => !item.cancelledAt && paidStatuses.has(item.financialStatus));
+
+  if (!order) {
+    const cancelled = matches.find((item) => item.cancelledAt);
+    return cancelled
+      ? { label: `Cancelled${cancelled.orderName ? ` (${cancelled.orderName})` : ''}`, order: cancelled }
+      : { label: 'Awaiting purchase', order: null };
+  }
+
+  const suffix = !addedAt
+    ? ' - wishlist date unknown'
+    : order.financialStatus === 'REFUNDED'
+      ? ' - refunded'
+      : order.financialStatus === 'PARTIALLY_REFUNDED'
+        ? ' - partially refunded'
+        : '';
+  return {
+    label: `Purchased${order.orderName ? ` (${order.orderName})` : ''}${suffix}`,
+    order,
+  };
+};
+
+async function handleOrderWebhook(request, env) {
+  const rawBody = await request.text();
+  const signature = request.headers.get('X-Shopify-Hmac-Sha256') || '';
+  if (!(await verifyWebhookHmac(rawBody, signature, env.SHOPIFY_API_SECRET))) {
+    return new Response('Invalid webhook signature', { status: 401 });
+  }
+
+  const shop = request.headers.get('X-Shopify-Shop-Domain') || '';
+  if (shop !== env.SHOPIFY_SHOP) return new Response('Unexpected shop', { status: 403 });
+
+  const webhookId = request.headers.get('X-Shopify-Webhook-Id') || '';
+  if (webhookId && (await env.WISHLIST_TOKENS.get(webhookDeliveryKey(webhookId)))) {
+    return new Response(null, { status: 200 });
+  }
+
+  const topic = request.headers.get('X-Shopify-Topic') || '';
+  const payload = JSON.parse(rawBody);
+  const customerId = payload.customer?.id;
+  if (!customerId || !['orders/paid', 'orders/cancelled'].includes(topic)) {
+    return new Response(null, { status: 200 });
+  }
+
+  const orderId = payload.admin_graphql_api_id || `gid://shopify/Order/${payload.id}`;
+  const purchases = await getStoredPurchases(env, customerId);
+  const record = normalizePurchase({
+    id: orderId,
+    name: payload.name,
+    processedAt: payload.processed_at || payload.created_at,
+    cancelledAt: topic === 'orders/cancelled' ? payload.cancelled_at || new Date().toISOString() : null,
+    displayFinancialStatus: String(payload.financial_status || 'paid').toUpperCase(),
+    productIds: (payload.line_items || []).map((item) =>
+      item.product_id ? `gid://shopify/Product/${item.product_id}` : null
+    ),
+  });
+  const existingIndex = purchases.findIndex((item) => item.orderId === orderId);
+  if (existingIndex >= 0) purchases[existingIndex] = { ...purchases[existingIndex], ...record };
+  else purchases.unshift(record);
+
+  await env.WISHLIST_TOKENS.put(
+    customerPurchaseKey(customerId),
+    JSON.stringify(purchases.slice(0, 250))
+  );
+  if (webhookId) {
+    await env.WISHLIST_TOKENS.put(webhookDeliveryKey(webhookId), '1', { expirationTtl: 2592000 });
+  }
+  return new Response(null, { status: 200 });
+}
 
 async function getWishlistIds(env, customerId) {
   const data = await shopifyGraphql(
@@ -343,6 +503,10 @@ async function renderDashboard(env, session, customerId = '', view = '') {
   const productIds = [...new Set(visibleCustomers.flatMap((customer) => customer.ids))];
   const products = await getProducts(env, productIds);
   const productById = new Map(products.map((product) => [product.id, product]));
+  const purchaseEntries = await Promise.all(
+    visibleCustomers.map(async (customer) => [customer.id, await getCustomerPurchases(env, customer.id)])
+  );
+  const purchasesByCustomer = new Map(purchaseEntries);
   const totalItems = customers.reduce((sum, customer) => sum + customer.ids.length, 0);
 
   const customerCards = customers
@@ -365,6 +529,11 @@ async function renderDashboard(env, session, customerId = '', view = '') {
         const trackedTime = detail.addedAt ? formatIndiaTime(detail.addedAt) : '';
         const age = detail.addedAt ? formatAge(detail.addedAt) : '';
         const oldTime = formatIndiaTime(customer.idsUpdatedAt);
+        const purchaseStatus = getPurchaseStatus(
+          purchasesByCustomer.get(customer.id) || [],
+          productId,
+          detail.addedAt
+        );
         return `
           <tr>
             ${
@@ -388,14 +557,18 @@ async function renderDashboard(env, session, customerId = '', view = '') {
               ${!trackedTime && oldTime ? `<small>Wishlist last changed: ${escapeHtml(oldTime)}</small>` : ''}
             </td>
             <td>${age ? escapeHtml(age) : 'Unknown for old entry'}</td>
+            <td>
+              ${escapeHtml(purchaseStatus.label)}
+              ${purchaseStatus.order?.purchasedAt ? `<small>${escapeHtml(formatIndiaTime(purchaseStatus.order.purchasedAt))}</small>` : ''}
+            </td>
           </tr>`;
       })
     )
     .join('');
 
   const tableHead = selectedCustomer
-    ? '<tr><th>Product</th><th>Price</th><th>Wishlist time</th><th>Wishlist age</th></tr>'
-    : '<tr><th>Customer</th><th>Product</th><th>Price</th><th>Wishlist time</th><th>Wishlist age</th></tr>';
+    ? '<tr><th>Product</th><th>Price</th><th>Wishlist time</th><th>Wishlist age</th><th>Purchase status</th></tr>'
+    : '<tr><th>Customer</th><th>Product</th><th>Price</th><th>Wishlist time</th><th>Wishlist age</th><th>Purchase status</th></tr>';
   const dashboardContent = selectedCustomer
     ? `<div class="toolbar"><a class="back" href="/dashboard?session=${encodeURIComponent(session)}">Back to customers</a></div>
        <h2>${escapeHtml(selectedCustomer.displayName || selectedCustomer.email || 'Customer wishlist')}</h2>
@@ -477,6 +650,10 @@ async function exportDashboardCsv(env, session, customerId = '', view = '') {
   const productIds = [...new Set(visibleCustomers.flatMap((customer) => customer.ids))];
   const products = await getProducts(env, productIds);
   const productById = new Map(products.map((product) => [product.id, product]));
+  const purchaseEntries = await Promise.all(
+    visibleCustomers.map(async (customer) => [customer.id, await getCustomerPurchases(env, customer.id)])
+  );
+  const purchasesByCustomer = new Map(purchaseEntries);
 
   const lines = [
     [
@@ -491,6 +668,9 @@ async function exportDashboardCsv(env, session, customerId = '', view = '') {
       'Wishlist Time',
       'Wishlist Age',
       'Wishlist Last Changed',
+      'Purchase Status',
+      'Purchase Order',
+      'Purchase Time',
     ].map(csvEscape).join(','),
   ];
 
@@ -498,6 +678,11 @@ async function exportDashboardCsv(env, session, customerId = '', view = '') {
     for (const productId of customer.ids) {
       const product = productById.get(productId);
       const detail = customer.details.find((item) => item.productId === productId) || {};
+      const purchaseStatus = getPurchaseStatus(
+        purchasesByCustomer.get(customer.id) || [],
+        productId,
+        detail.addedAt
+      );
       lines.push(
         [
           customer.displayName || '',
@@ -511,6 +696,9 @@ async function exportDashboardCsv(env, session, customerId = '', view = '') {
           detail.addedAt ? formatIndiaTime(detail.addedAt) : '',
           detail.addedAt ? formatAge(detail.addedAt) : '',
           formatIndiaTime(customer.idsUpdatedAt),
+          purchaseStatus.label,
+          purchaseStatus.order?.orderName || '',
+          purchaseStatus.order?.purchasedAt ? formatIndiaTime(purchaseStatus.order.purchasedAt) : '',
         ]
           .map(csvEscape)
           .join(',')
@@ -600,6 +788,11 @@ async function handleAuthCallback(request, env) {
 
 async function handleRequest(request, env) {
   const url = new URL(request.url);
+
+  if (url.pathname === '/webhooks/orders') {
+    if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
+    return handleOrderWebhook(request, env);
+  }
 
   if (url.pathname === '/auth/start') {
     return handleAuthStart(request, env);
