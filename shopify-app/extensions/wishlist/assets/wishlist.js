@@ -300,18 +300,22 @@
 
     const id = context.productId;
     const gid = productGid(id);
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'wishlist-app-button';
-    button.dataset.wishlistProductId = String(id);
-
-    setPressed(button, wishlistIds.includes(gid));
-
     const form = document.querySelector('form[action*="/cart/add"]');
-    if (!form || form.parentElement?.querySelector('.wishlist-app-button')) return;
-    form.insertAdjacentElement('afterend', button);
+    if (!form) return;
 
-    button.addEventListener('click', () => toggleProduct(button, id));
+    const container = form.parentElement;
+    let button = container?.querySelector('.wishlist-app-button');
+    const isNew = !button;
+    if (isNew) {
+      button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'wishlist-app-button';
+      button.addEventListener('click', () => toggleProduct(button, id));
+      form.insertAdjacentElement('afterend', button);
+    }
+
+    button.dataset.wishlistProductId = String(id);
+    setPressed(button, wishlistIds.includes(gid));
   };
 
   const productMediaSelector =
