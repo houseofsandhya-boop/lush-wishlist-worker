@@ -164,7 +164,9 @@
     const id = normalizeId(context.productId);
     if (!id) return;
     const form = document.querySelector('form[action*="/cart/add"]');
-    if (form && !form.parentElement?.querySelector('.wishlist-app-button')) {
+    const productButton = document.querySelector('.wishlist-app-button');
+    if (!context.showProductButton) productButton?.remove();
+    else if (form && !productButton) {
       form.insertAdjacentElement('afterend', createButton('wishlist-app-button', id));
     }
     const media = findProductMedia();

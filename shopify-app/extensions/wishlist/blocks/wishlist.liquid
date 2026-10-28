@@ -2,6 +2,7 @@
   {
     "buttonLabel": {{ block.settings.button_label | json }},
     "addedLabel": {{ block.settings.added_label | json }},
+    "showProductButton": {{ block.settings.show_product_button | json }},
     "loginUrl": {{ routes.account_login_url | json }},
     "customerId": {% if customer %}{{ customer.id | json }}{% else %}null{% endif %},
     "productId": {% if product %}{{ product.id | json }}{% else %}null{% endif %}
@@ -15,6 +16,12 @@
   "javascript": "wishlist.js",
   "stylesheet": "wishlist.css",
   "settings": [
+    {
+      "type": "checkbox",
+      "id": "show_product_button",
+      "label": "Show product page button",
+      "default": false
+    },
     {
       "type": "text",
       "id": "button_label",
