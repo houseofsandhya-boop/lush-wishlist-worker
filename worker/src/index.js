@@ -96,6 +96,8 @@ const detailsKey = (env) => `${env.WISHLIST_KEY || 'wishlist'}_details`;
 const adminSessionKey = (session) => `admin_session:${session}`;
 const customerPurchaseKey = (customerId) => `customer_purchase:${customerId}`;
 const webhookDeliveryKey = (webhookId) => `webhook_delivery:${webhookId}`;
+const followUpRecordKey = (customerId, productId) =>
+  `follow_up:${legacyId(customerId)}:${legacyId(productId)}`;
 
 async function getAdminToken(env) {
   const token = await env.WISHLIST_TOKENS?.get(tokenKey(env.SHOPIFY_SHOP));
@@ -172,7 +174,7 @@ const legacyId = (gid = '') => String(gid).split('/').pop();
 const storefrontUrl = (env, path = '') =>
   `${String(env.STOREFRONT_URL || `https://${env.SHOPIFY_SHOP}`).replace(/\/+$/, '')}${path}`;
 
-const followUpEmailUrl = (env, customer, product) => {
+const followUpEmailUrl = (env, customer, product, followUpNumber, couponCode = '') => {
   if (!customer.email || !product) return '';
   const customerName = customer.displayName || 'there';
   const productUrl = storefrontUrl(env, product.url || '');
@@ -183,6 +185,9 @@ const followUpEmailUrl = (env, customer, product) => {
     `You saved ${product.title} to your House of Sandhya wishlist.`,
     'It is still waiting for you:',
     productUrl,
+    ...(followUpNumber === 3
+      ? ['', `As a special thank-you, use coupon code ${couponCode} at checkout.`]
+      : []),
     '',
     'Regards,',
     'House of Sandhya',
@@ -196,6 +201,13 @@ const followUpEmailUrl = (env, customer, product) => {
   });
   return `https://mail.google.com/mail/?${params}`;
 };
+
+async function getFollowUpRecord(env, customerId, productId) {
+  const record = await env.WISHLIST_TOKENS.get(followUpRecordKey(customerId, productId), 'json');
+  return record && Number.isFinite(record.count)
+    ? record
+    : { count: 0, lastFollowUpAt: null };
+}
 
 const paidStatuses = new Set(['PAID', 'PARTIALLY_PAID', 'PARTIALLY_REFUNDED', 'REFUNDED']);
 
@@ -535,6 +547,15 @@ async function renderDashboard(env, session, customerId = '', view = '') {
     visibleCustomers.map(async (customer) => [customer.id, await getCustomerPurchases(env, customer.id)])
   );
   const purchasesByCustomer = new Map(purchaseEntries);
+  const followUpEntries = await Promise.all(
+    visibleCustomers.flatMap((customer) =>
+      customer.ids.map(async (productId) => [
+        `${customer.id}:${productId}`,
+        await getFollowUpRecord(env, customer.id, productId),
+      ])
+    )
+  );
+  const followUpsByItem = new Map(followUpEntries);
   const totalItems = customers.reduce((sum, customer) => sum + customer.ids.length, 0);
 
   const customerCards = customers
@@ -562,7 +583,11 @@ async function renderDashboard(env, session, customerId = '', view = '') {
           productId,
           detail.addedAt
         );
-        const emailUrl = followUpEmailUrl(env, customer, product);
+        const followUp = followUpsByItem.get(`${customer.id}:${productId}`) || {
+          count: 0,
+          lastFollowUpAt: null,
+        };
+        const nextFollowUp = followUp.count + 1;
         return `
           <tr>
             ${
@@ -591,10 +616,24 @@ async function renderDashboard(env, session, customerId = '', view = '') {
               ${purchaseStatus.order?.purchasedAt ? `<small>${escapeHtml(formatIndiaTime(purchaseStatus.order.purchasedAt))}</small>` : ''}
             </td>
             <td>
+              <strong class="follow-up-count">Follow-ups: ${followUp.count} / 3</strong>
+              ${followUp.lastFollowUpAt ? `<small>Last: ${escapeHtml(formatIndiaTime(followUp.lastFollowUpAt))}</small>` : ''}
               ${
-                emailUrl
-                  ? `<a class="follow-up" href="${escapeHtml(emailUrl)}" target="_blank" rel="noreferrer">Email follow-up</a>`
-                  : '<span class="unavailable">Email unavailable</span>'
+                !customer.email
+                  ? '<span class="unavailable">Email unavailable</span>'
+                  : followUp.count >= 3
+                    ? '<span class="complete">Follow-ups complete</span>'
+                    : `<form class="follow-up-form" method="post" action="/dashboard/follow-up" target="_blank">
+                        <input type="hidden" name="session" value="${escapeHtml(session)}">
+                        <input type="hidden" name="customerId" value="${escapeHtml(customer.id)}">
+                        <input type="hidden" name="productId" value="${escapeHtml(productId)}">
+                        ${
+                          nextFollowUp === 3
+                            ? '<input class="coupon-input" type="text" name="couponCode" placeholder="Coupon code" maxlength="64" required>'
+                            : ''
+                        }
+                        <button class="follow-up" type="submit">Email follow-up #${nextFollowUp}${nextFollowUp === 3 ? ' + coupon' : ''}</button>
+                      </form>`
               }
             </td>
           </tr>`;
@@ -648,7 +687,12 @@ async function renderDashboard(env, session, customerId = '', view = '') {
           .toolbar{margin-bottom:16px}
           .back,.button-link{color:#111}
           .button-link{display:inline-flex;background:#111;color:#fff;text-decoration:none;border-radius:6px;padding:10px 14px}
-          .follow-up{display:inline-flex;white-space:nowrap;background:#111;color:#fff;text-decoration:none;border-radius:6px;padding:9px 12px;font-weight:600}
+          .follow-up{display:inline-flex;white-space:nowrap;background:#111;color:#fff;text-decoration:none;border:0;border-radius:6px;padding:9px 12px;font-weight:600;cursor:pointer}
+          .follow-up-count{display:block;white-space:nowrap;margin-bottom:5px}
+          .follow-up-form{display:grid;gap:7px;margin-top:8px}
+          .coupon-input{box-sizing:border-box;width:150px;border:1px solid #c9cccf;border-radius:6px;padding:8px}
+          .follow-up:disabled{background:#8c9196;cursor:default}
+          .complete{display:block;margin-top:7px;color:#287d3c;font-size:13px;font-weight:600;white-space:nowrap}
           .unavailable{color:#8c9196;font-size:13px;white-space:nowrap}
           table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #ddd}
           th,td{padding:12px;border-bottom:1px solid #eee;text-align:left;vertical-align:top}
@@ -667,6 +711,21 @@ async function renderDashboard(env, session, customerId = '', view = '') {
           </div>
           ${dashboardContent}
         </main>
+        <script>
+          document.addEventListener('submit', (event) => {
+            const form = event.target.closest('.follow-up-form');
+            if (!form) return;
+            const button = form.querySelector('.follow-up');
+            const count = form.parentElement.querySelector('.follow-up-count');
+            const match = (count?.textContent || '').match(/(\d+)\s*\/\s*3/);
+            const current = Number(match?.[1] || 0);
+            if (count) count.textContent = 'Follow-ups: ' + Math.min(3, current + 1) + ' / 3';
+            if (button) {
+              button.disabled = true;
+              button.textContent = 'Follow-up opened - refresh to continue';
+            }
+          });
+        </script>
       </body>
     </html>`,
     { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } }
@@ -751,6 +810,45 @@ async function exportDashboardCsv(env, session, customerId = '', view = '') {
       'Cache-Control': 'no-store',
     },
   });
+}
+
+async function handleDashboardFollowUp(request, env) {
+  const form = await request.formData();
+  const session = String(form.get('session') || '');
+  const customerId = String(form.get('customerId') || '');
+  const productId = String(form.get('productId') || '');
+  const couponCode = String(form.get('couponCode') || '').trim();
+  const storedShop = await env.WISHLIST_TOKENS.get(adminSessionKey(session));
+
+  if (storedShop !== env.SHOPIFY_SHOP) {
+    return new Response('Unauthorized dashboard session. Open the app again from Shopify admin.', {
+      status: 401,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+    });
+  }
+
+  const customers = await getWishlistCustomers(env);
+  const customer = customers.find(
+    (item) => item.id === customerId && item.ids.includes(productId)
+  );
+  if (!customer?.email) return badRequest('Customer email or wishlist product was not found');
+
+  const [product] = await getProducts(env, [productId]);
+  if (!product) return badRequest('Product was not found');
+
+  const record = await getFollowUpRecord(env, customerId, productId);
+  const nextFollowUp = record.count + 1;
+  if (nextFollowUp > 3) return badRequest('All three follow-ups are already complete');
+  if (nextFollowUp === 3 && !/^[A-Za-z0-9_-]{2,64}$/.test(couponCode)) {
+    return badRequest('Enter a valid coupon code for the third follow-up');
+  }
+
+  const emailUrl = followUpEmailUrl(env, customer, product, nextFollowUp, couponCode);
+  await env.WISHLIST_TOKENS.put(
+    followUpRecordKey(customerId, productId),
+    JSON.stringify({ count: nextFollowUp, lastFollowUpAt: new Date().toISOString() })
+  );
+  return Response.redirect(emailUrl, 303);
 }
 
 async function handleAuthStart(request, env) {
@@ -847,6 +945,11 @@ async function handleRequest(request, env) {
       url.searchParams.get('customer') || '',
       url.searchParams.get('view') || ''
     );
+  }
+
+  if (url.pathname === '/dashboard/follow-up') {
+    if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
+    return handleDashboardFollowUp(request, env);
   }
 
   if (url.pathname === '/dashboard.csv') {
