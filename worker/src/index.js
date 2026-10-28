@@ -169,6 +169,34 @@ const csvEscape = (value = '') => `"${String(value).replace(/"/g, '""')}"`;
 
 const legacyId = (gid = '') => String(gid).split('/').pop();
 
+const storefrontUrl = (env, path = '') =>
+  `${String(env.STOREFRONT_URL || `https://${env.SHOPIFY_SHOP}`).replace(/\/+$/, '')}${path}`;
+
+const followUpEmailUrl = (env, customer, product) => {
+  if (!customer.email || !product) return '';
+  const customerName = customer.displayName || 'there';
+  const productUrl = storefrontUrl(env, product.url || '');
+  const subject = `Still interested in ${product.title}?`;
+  const body = [
+    `Hi ${customerName},`,
+    '',
+    `You saved ${product.title} to your House of Sandhya wishlist.`,
+    'It is still waiting for you:',
+    productUrl,
+    '',
+    'Regards,',
+    'House of Sandhya',
+  ].join('\n');
+  const params = new URLSearchParams({
+    view: 'cm',
+    fs: '1',
+    to: customer.email,
+    su: subject,
+    body,
+  });
+  return `https://mail.google.com/mail/?${params}`;
+};
+
 const paidStatuses = new Set(['PAID', 'PARTIALLY_PAID', 'PARTIALLY_REFUNDED', 'REFUNDED']);
 
 const normalizePurchase = (order) => ({
@@ -534,6 +562,7 @@ async function renderDashboard(env, session, customerId = '', view = '') {
           productId,
           detail.addedAt
         );
+        const emailUrl = followUpEmailUrl(env, customer, product);
         return `
           <tr>
             ${
@@ -561,14 +590,21 @@ async function renderDashboard(env, session, customerId = '', view = '') {
               ${escapeHtml(purchaseStatus.label)}
               ${purchaseStatus.order?.purchasedAt ? `<small>${escapeHtml(formatIndiaTime(purchaseStatus.order.purchasedAt))}</small>` : ''}
             </td>
+            <td>
+              ${
+                emailUrl
+                  ? `<a class="follow-up" href="${escapeHtml(emailUrl)}" target="_blank" rel="noreferrer">Email follow-up</a>`
+                  : '<span class="unavailable">Email unavailable</span>'
+              }
+            </td>
           </tr>`;
       })
     )
     .join('');
 
   const tableHead = selectedCustomer
-    ? '<tr><th>Product</th><th>Price</th><th>Wishlist time</th><th>Wishlist age</th><th>Purchase status</th></tr>'
-    : '<tr><th>Customer</th><th>Product</th><th>Price</th><th>Wishlist time</th><th>Wishlist age</th><th>Purchase status</th></tr>';
+    ? '<tr><th>Product</th><th>Price</th><th>Wishlist time</th><th>Wishlist age</th><th>Purchase status</th><th>Follow-up</th></tr>'
+    : '<tr><th>Customer</th><th>Product</th><th>Price</th><th>Wishlist time</th><th>Wishlist age</th><th>Purchase status</th><th>Follow-up</th></tr>';
   const dashboardContent = selectedCustomer
     ? `<div class="toolbar"><a class="back" href="/dashboard?session=${encodeURIComponent(session)}">Back to customers</a></div>
        <h2>${escapeHtml(selectedCustomer.displayName || selectedCustomer.email || 'Customer wishlist')}</h2>
@@ -612,6 +648,8 @@ async function renderDashboard(env, session, customerId = '', view = '') {
           .toolbar{margin-bottom:16px}
           .back,.button-link{color:#111}
           .button-link{display:inline-flex;background:#111;color:#fff;text-decoration:none;border-radius:6px;padding:10px 14px}
+          .follow-up{display:inline-flex;white-space:nowrap;background:#111;color:#fff;text-decoration:none;border-radius:6px;padding:9px 12px;font-weight:600}
+          .unavailable{color:#8c9196;font-size:13px;white-space:nowrap}
           table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #ddd}
           th,td{padding:12px;border-bottom:1px solid #eee;text-align:left;vertical-align:top}
           th{background:#fafafa;font-size:12px;text-transform:uppercase;letter-spacing:.04em}

@@ -9,6 +9,7 @@ SHOPIFY_API_KEY = "2103be1907ad7d7057c951aecb7cd07c"
 SHOPIFY_API_VERSION = "2026-01"
 WISHLIST_NAMESPACE = "custom"
 WISHLIST_KEY = "wishlist"
+STOREFRONT_URL = "https://houseofsandhya.com"
 
 [[kv_namespaces]]
 binding = "WISHLIST_TOKENS"
