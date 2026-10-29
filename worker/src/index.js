@@ -527,7 +527,7 @@ async function getWishlistCustomers(env) {
   return customers;
 }
 
-async function renderDashboard(env, session, customerId = '', view = '') {
+async function renderDashboard(env, session, customerId = '', view = '', followUp = '') {
   const storedShop = await env.WISHLIST_TOKENS.get(adminSessionKey(session || ''));
   if (storedShop !== env.SHOPIFY_SHOP) {
     return new Response('Unauthorized dashboard session. Open the app again from Shopify admin.', {
@@ -538,17 +538,11 @@ async function renderDashboard(env, session, customerId = '', view = '') {
 
   const customers = await getWishlistCustomers(env);
   const isAllCustomersView = view === 'all';
+  const followUpStage = ['1', '2', '3'].includes(String(followUp)) ? Number(followUp) : 0;
+  const isFollowUpView = followUpStage > 0;
   const selectedCustomer = customerId ? customers.find((customer) => customer.id === customerId) : null;
-  const visibleCustomers = selectedCustomer ? [selectedCustomer] : isAllCustomersView ? customers : [];
-  const productIds = [...new Set(visibleCustomers.flatMap((customer) => customer.ids))];
-  const products = await getProducts(env, productIds);
-  const productById = new Map(products.map((product) => [product.id, product]));
-  const purchaseEntries = await Promise.all(
-    visibleCustomers.map(async (customer) => [customer.id, await getCustomerPurchases(env, customer.id)])
-  );
-  const purchasesByCustomer = new Map(purchaseEntries);
   const followUpEntries = await Promise.all(
-    visibleCustomers.flatMap((customer) =>
+    customers.flatMap((customer) =>
       customer.ids.map(async (productId) => [
         `${customer.id}:${productId}`,
         await getFollowUpRecord(env, customer.id, productId),
@@ -556,6 +550,41 @@ async function renderDashboard(env, session, customerId = '', view = '') {
     )
   );
   const followUpsByItem = new Map(followUpEntries);
+  const followUpCustomerGroups = new Map([
+    [1, new Set()],
+    [2, new Set()],
+    [3, new Set()],
+  ]);
+  for (const customer of customers) {
+    for (const productId of customer.ids) {
+      const count = followUpsByItem.get(`${customer.id}:${productId}`)?.count || 0;
+      if (followUpCustomerGroups.has(count)) followUpCustomerGroups.get(count).add(customer.id);
+    }
+  }
+  const visibleCustomers = selectedCustomer
+    ? [selectedCustomer]
+    : isAllCustomersView
+      ? customers
+      : isFollowUpView
+        ? customers.filter((customer) => followUpCustomerGroups.get(followUpStage).has(customer.id))
+        : [];
+  const productIds = [
+    ...new Set(
+      visibleCustomers.flatMap((customer) =>
+        customer.ids.filter(
+          (productId) =>
+            !isFollowUpView ||
+            followUpsByItem.get(`${customer.id}:${productId}`)?.count === followUpStage
+        )
+      )
+    ),
+  ];
+  const products = await getProducts(env, productIds);
+  const productById = new Map(products.map((product) => [product.id, product]));
+  const purchaseEntries = await Promise.all(
+    visibleCustomers.map(async (customer) => [customer.id, await getCustomerPurchases(env, customer.id)])
+  );
+  const purchasesByCustomer = new Map(purchaseEntries);
   const totalItems = customers.reduce((sum, customer) => sum + customer.ids.length, 0);
 
   const customerCards = customers
@@ -572,7 +601,13 @@ async function renderDashboard(env, session, customerId = '', view = '') {
 
   const rows = visibleCustomers
     .flatMap((customer) =>
-      customer.ids.map((productId) => {
+      customer.ids
+        .filter(
+          (productId) =>
+            !isFollowUpView ||
+            followUpsByItem.get(`${customer.id}:${productId}`)?.count === followUpStage
+        )
+        .map((productId) => {
         const product = productById.get(productId);
         const detail = customer.details.find((item) => item.productId === productId) || {};
         const trackedTime = detail.addedAt ? formatIndiaTime(detail.addedAt) : '';
@@ -637,7 +672,7 @@ async function renderDashboard(env, session, customerId = '', view = '') {
               }
             </td>
           </tr>`;
-      })
+        })
     )
     .join('');
 
@@ -662,6 +697,15 @@ async function renderDashboard(env, session, customerId = '', view = '') {
              ? `<table><thead>${tableHead}</thead><tbody>${rows}</tbody></table>`
              : '<div class="empty">No customer wishlist data found yet.</div>'
          }`
+    : isFollowUpView
+      ? `<div class="toolbar"><a class="back" href="/dashboard?session=${encodeURIComponent(session)}">Back to customers</a></div>
+         <h2>Customers with ${followUpStage} follow-up${followUpStage === 1 ? '' : 's'}</h2>
+         <p class="group-note">Showing wishlist products currently at follow-up stage ${followUpStage}.</p>
+         ${
+           rows
+             ? `<table><thead>${tableHead}</thead><tbody>${rows}</tbody></table>`
+             : '<div class="empty">No customers are in this follow-up group yet.</div>'
+         }`
     : customerCards
       ? `<div class="customer-grid">${customerCards}</div>`
       : '<div class="empty">No customer wishlist data found yet.</div>';
@@ -677,14 +721,17 @@ async function renderDashboard(env, session, customerId = '', view = '') {
           body{margin:0;font-family:Arial,sans-serif;background:#f6f6f7;color:#202223}
           header{padding:24px 32px;background:#111;color:#fff}
           main{padding:24px 32px}
-          .stats{display:flex;gap:12px;margin-bottom:18px}
-          .stat{background:#fff;border:1px solid #ddd;border-radius:8px;padding:16px;min-width:160px}
+          .stats{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:18px}
+          .stat{background:#fff;border:1px solid #ddd;border-radius:8px;padding:16px;min-width:160px;color:inherit;text-decoration:none}
+          a.stat:hover{border-color:#111}
           .stat strong{display:block;font-size:28px}
+          .stat small{font-size:12px}
           .customer-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
           .customer-card{display:block;background:#fff;border:1px solid #ddd;border-radius:8px;padding:16px;text-decoration:none;color:inherit}
           .customer-card:hover{border-color:#111}
           .customer-card strong,.customer-card span,.customer-card b{display:block;margin-top:5px}
           .toolbar{margin-bottom:16px}
+          .group-note{color:#616161}
           .back,.button-link{color:#111}
           .button-link{display:inline-flex;background:#111;color:#fff;text-decoration:none;border-radius:6px;padding:10px 14px}
           .follow-up{display:inline-flex;white-space:nowrap;background:#111;color:#fff;text-decoration:none;border:0;border-radius:6px;padding:9px 12px;font-weight:600;cursor:pointer}
@@ -708,6 +755,9 @@ async function renderDashboard(env, session, customerId = '', view = '') {
             <div class="stat"><span>Customers</span><strong>${customers.length}</strong></div>
             <div class="stat"><span>Wishlist items</span><strong>${totalItems}</strong></div>
             <a class="stat" href="/dashboard?session=${encodeURIComponent(session)}&view=all"><span>All Customers</span><strong>View</strong></a>
+            <a class="stat" href="/dashboard?session=${encodeURIComponent(session)}&followup=1"><span>1 Follow-up</span><strong>${followUpCustomerGroups.get(1).size}</strong><small>customers</small></a>
+            <a class="stat" href="/dashboard?session=${encodeURIComponent(session)}&followup=2"><span>2 Follow-ups</span><strong>${followUpCustomerGroups.get(2).size}</strong><small>customers</small></a>
+            <a class="stat" href="/dashboard?session=${encodeURIComponent(session)}&followup=3"><span>3 Follow-ups</span><strong>${followUpCustomerGroups.get(3).size}</strong><small>customers</small></a>
           </div>
           ${dashboardContent}
         </main>
@@ -943,7 +993,8 @@ async function handleRequest(request, env) {
       env,
       url.searchParams.get('session'),
       url.searchParams.get('customer') || '',
-      url.searchParams.get('view') || ''
+      url.searchParams.get('view') || '',
+      url.searchParams.get('followup') || ''
     );
   }
 
