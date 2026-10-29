@@ -538,8 +538,8 @@ async function renderDashboard(env, session, customerId = '', view = '', followU
 
   const customers = await getWishlistCustomers(env);
   const isAllCustomersView = view === 'all';
-  const followUpStage = ['1', '2', '3'].includes(String(followUp)) ? Number(followUp) : 0;
-  const isFollowUpView = followUpStage > 0;
+  const isFollowUpView = ['0', '1', '2', '3'].includes(String(followUp));
+  const followUpStage = isFollowUpView ? Number(followUp) : 0;
   const selectedCustomer = customerId ? customers.find((customer) => customer.id === customerId) : null;
   const followUpEntries = await Promise.all(
     customers.flatMap((customer) =>
@@ -551,14 +551,22 @@ async function renderDashboard(env, session, customerId = '', view = '', followU
   );
   const followUpsByItem = new Map(followUpEntries);
   const followUpCustomerGroups = new Map([
+    [0, new Set()],
     [1, new Set()],
     [2, new Set()],
     [3, new Set()],
   ]);
   for (const customer of customers) {
-    for (const productId of customer.ids) {
-      const count = followUpsByItem.get(`${customer.id}:${productId}`)?.count || 0;
-      if (followUpCustomerGroups.has(count)) followUpCustomerGroups.get(count).add(customer.id);
+    const counts = customer.ids.map(
+      (productId) => followUpsByItem.get(`${customer.id}:${productId}`)?.count || 0
+    );
+    if (counts.length && counts.every((count) => count === 0)) {
+      followUpCustomerGroups.get(0).add(customer.id);
+    }
+    for (const count of counts) {
+      if (count > 0 && followUpCustomerGroups.has(count)) {
+        followUpCustomerGroups.get(count).add(customer.id);
+      }
     }
   }
   const visibleCustomers = selectedCustomer
@@ -699,8 +707,8 @@ async function renderDashboard(env, session, customerId = '', view = '', followU
          }`
     : isFollowUpView
       ? `<div class="toolbar"><a class="back" href="/dashboard?session=${encodeURIComponent(session)}">Back to customers</a></div>
-         <h2>Customers with ${followUpStage} follow-up${followUpStage === 1 ? '' : 's'}</h2>
-         <p class="group-note">Showing wishlist products currently at follow-up stage ${followUpStage}.</p>
+         <h2>${followUpStage === 0 ? 'Customers with no follow-ups' : `Customers with ${followUpStage} follow-up${followUpStage === 1 ? '' : 's'}`}</h2>
+         <p class="group-note">${followUpStage === 0 ? 'Showing customers who have not received any wishlist follow-up yet.' : `Showing wishlist products currently at follow-up stage ${followUpStage}.`}</p>
          ${
            rows
              ? `<table><thead>${tableHead}</thead><tbody>${rows}</tbody></table>`
@@ -755,6 +763,7 @@ async function renderDashboard(env, session, customerId = '', view = '', followU
             <div class="stat"><span>Customers</span><strong>${customers.length}</strong></div>
             <div class="stat"><span>Wishlist items</span><strong>${totalItems}</strong></div>
             <a class="stat" href="/dashboard?session=${encodeURIComponent(session)}&view=all"><span>All Customers</span><strong>View</strong></a>
+            <a class="stat" href="/dashboard?session=${encodeURIComponent(session)}&followup=0"><span>No Follow-up</span><strong>${followUpCustomerGroups.get(0).size}</strong><small>customers</small></a>
             <a class="stat" href="/dashboard?session=${encodeURIComponent(session)}&followup=1"><span>1 Follow-up</span><strong>${followUpCustomerGroups.get(1).size}</strong><small>customers</small></a>
             <a class="stat" href="/dashboard?session=${encodeURIComponent(session)}&followup=2"><span>2 Follow-ups</span><strong>${followUpCustomerGroups.get(2).size}</strong><small>customers</small></a>
             <a class="stat" href="/dashboard?session=${encodeURIComponent(session)}&followup=3"><span>3 Follow-ups</span><strong>${followUpCustomerGroups.get(3).size}</strong><small>customers</small></a>
