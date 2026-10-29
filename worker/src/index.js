@@ -238,6 +238,59 @@ async function getFollowUpRecord(env, customerId, productId) {
     : { count: 0, lastFollowUpAt: null };
 }
 
+async function loadFollowUpRecords(env, customers) {
+  const entries = await Promise.all(
+    customers.flatMap((customer) =>
+      customer.ids.map(async (productId) => [
+        `${customer.id}:${productId}`,
+        await getFollowUpRecord(env, customer.id, productId),
+      ])
+    )
+  );
+  return new Map(entries);
+}
+
+function summarizeFollowUps(customers, records) {
+  const groupSets = new Map([
+    [0, new Set()],
+    [1, new Set()],
+    [2, new Set()],
+    [3, new Set()],
+  ]);
+  const eligibleGroupSets = new Map([
+    [0, new Set()],
+    [1, new Set()],
+    [2, new Set()],
+    [3, new Set()],
+  ]);
+
+  for (const customer of customers) {
+    const counts = customer.ids.map(
+      (productId) => records.get(`${customer.id}:${productId}`)?.count || 0
+    );
+    const stages = new Set(counts.filter((count) => count > 0 && count <= 3));
+    if (counts.length && counts.every((count) => count === 0)) stages.add(0);
+    for (const stage of stages) {
+      groupSets.get(stage).add(customer.id);
+      if (
+        customer.email &&
+        customer.emailMarketingConsent?.marketingState === 'SUBSCRIBED'
+      ) {
+        eligibleGroupSets.get(stage).add(customer.id);
+      }
+    }
+  }
+
+  return {
+    groupSets,
+    eligibleGroupSets,
+    groupCounts: Object.fromEntries([...groupSets].map(([stage, ids]) => [stage, ids.size])),
+    eligibleGroupCounts: Object.fromEntries(
+      [...eligibleGroupSets].map(([stage, ids]) => [stage, ids.size])
+    ),
+  };
+}
+
 const paidStatuses = new Set(['PAID', 'PARTIALLY_PAID', 'PARTIALLY_REFUNDED', 'REFUNDED']);
 
 const normalizePurchase = (order) => ({
@@ -571,34 +624,9 @@ async function renderDashboard(env, session, customerId = '', view = '', followU
   const isFollowUpView = ['0', '1', '2', '3'].includes(String(followUp));
   const followUpStage = isFollowUpView ? Number(followUp) : 0;
   const selectedCustomer = customerId ? customers.find((customer) => customer.id === customerId) : null;
-  const followUpEntries = await Promise.all(
-    customers.flatMap((customer) =>
-      customer.ids.map(async (productId) => [
-        `${customer.id}:${productId}`,
-        await getFollowUpRecord(env, customer.id, productId),
-      ])
-    )
-  );
-  const followUpsByItem = new Map(followUpEntries);
-  const followUpCustomerGroups = new Map([
-    [0, new Set()],
-    [1, new Set()],
-    [2, new Set()],
-    [3, new Set()],
-  ]);
-  for (const customer of customers) {
-    const counts = customer.ids.map(
-      (productId) => followUpsByItem.get(`${customer.id}:${productId}`)?.count || 0
-    );
-    if (counts.length && counts.every((count) => count === 0)) {
-      followUpCustomerGroups.get(0).add(customer.id);
-    }
-    for (const count of counts) {
-      if (count > 0 && followUpCustomerGroups.has(count)) {
-        followUpCustomerGroups.get(count).add(customer.id);
-      }
-    }
-  }
+  const followUpsByItem = await loadFollowUpRecords(env, customers);
+  const followUpSummary = summarizeFollowUps(customers, followUpsByItem);
+  const followUpCustomerGroups = followUpSummary.groupSets;
   const visibleCustomers = selectedCustomer
     ? [selectedCustomer]
     : isAllCustomersView
@@ -662,7 +690,7 @@ async function renderDashboard(env, session, customerId = '', view = '', followU
         };
         const nextFollowUp = followUp.count + 1;
         return `
-          <tr>
+          <tr data-customer-id="${escapeHtml(customer.id)}" data-product-id="${escapeHtml(productId)}">
             ${
               selectedCustomer
                 ? ''
@@ -690,7 +718,7 @@ async function renderDashboard(env, session, customerId = '', view = '', followU
             </td>
             <td>
               <strong class="follow-up-count">Follow-ups: ${followUp.count} / 3</strong>
-              ${followUp.lastFollowUpAt ? `<small>Last: ${escapeHtml(formatIndiaTime(followUp.lastFollowUpAt))}</small>` : ''}
+              ${followUp.lastFollowUpAt ? `<small class="follow-up-last">Last: ${escapeHtml(formatIndiaTime(followUp.lastFollowUpAt))}</small>` : ''}
               ${
                 !customer.email
                   ? '<span class="unavailable">Email unavailable</span>'
@@ -730,7 +758,7 @@ async function renderDashboard(env, session, customerId = '', view = '', followU
       ? `<form class="bulk-follow-up-form" method="post" action="/dashboard/follow-up/bulk" target="_blank">
           <div class="bulk-summary">
             <strong>Bulk follow-up #${followUpStage + 1}</strong>
-            <span>${bulkCustomerCount} eligible of ${bulkGroupCount} customer${bulkGroupCount === 1 ? '' : 's'}</span>
+            <span class="bulk-eligibility">${bulkCustomerCount} eligible of ${bulkGroupCount} customer${bulkGroupCount === 1 ? '' : 's'}</span>
           </div>
           <input type="hidden" name="session" value="${escapeHtml(session)}">
           <input type="hidden" name="stage" value="${followUpStage}">
@@ -744,7 +772,7 @@ async function renderDashboard(env, session, customerId = '', view = '', followU
               ? `<button class="bulk-follow-up" type="submit">Open Gmail for ${bulkCustomerCount} eligible customer${bulkCustomerCount === 1 ? '' : 's'}${followUpStage === 2 ? ' + coupon' : ''}</button>`
               : '<span class="bulk-unavailable">No eligible marketing subscribers in this group</span>'
           }
-          <small>${bulkExcludedCount ? `${bulkExcludedCount} excluded because email marketing consent is missing. ` : ''}Eligible recipients are added in BCC; one Gmail compose will open.</small>
+          <small class="bulk-note">${bulkExcludedCount ? `${bulkExcludedCount} excluded because email marketing consent is missing. ` : ''}Eligible recipients are added in BCC; one Gmail compose will open.</small>
         </form>`
       : '';
   const dashboardContent = selectedCustomer
@@ -825,21 +853,137 @@ async function renderDashboard(env, session, customerId = '', view = '', followU
           .empty{background:#fff;border:1px solid #ddd;border-radius:8px;padding:24px}
         </style>
       </head>
-      <body>
+      <body data-follow-up-stage="${isFollowUpView ? followUpStage : ''}">
         <header><h1>Wishlist Dashboard</h1><p>${escapeHtml(env.SHOPIFY_SHOP)}</p></header>
         <main>
           <div class="stats">
             <div class="stat"><span>Customers</span><strong>${customers.length}</strong></div>
             <div class="stat"><span>Wishlist items</span><strong>${totalItems}</strong></div>
             <a class="stat" href="/dashboard?session=${encodeURIComponent(session)}&view=all"><span>All Customers</span><strong>View</strong></a>
-            <a class="stat" href="/dashboard?session=${encodeURIComponent(session)}&followup=0"><span>No Follow-up</span><strong>${followUpCustomerGroups.get(0).size}</strong><small>customers</small></a>
-            <a class="stat" href="/dashboard?session=${encodeURIComponent(session)}&followup=1"><span>1 Follow-up</span><strong>${followUpCustomerGroups.get(1).size}</strong><small>customers</small></a>
-            <a class="stat" href="/dashboard?session=${encodeURIComponent(session)}&followup=2"><span>2 Follow-ups</span><strong>${followUpCustomerGroups.get(2).size}</strong><small>customers</small></a>
-            <a class="stat" href="/dashboard?session=${encodeURIComponent(session)}&followup=3"><span>3 Follow-ups</span><strong>${followUpCustomerGroups.get(3).size}</strong><small>customers</small></a>
+            <a class="stat" data-follow-up-stat="0" href="/dashboard?session=${encodeURIComponent(session)}&followup=0"><span>No Follow-up</span><strong>${followUpCustomerGroups.get(0).size}</strong><small>customers</small></a>
+            <a class="stat" data-follow-up-stat="1" href="/dashboard?session=${encodeURIComponent(session)}&followup=1"><span>1 Follow-up</span><strong>${followUpCustomerGroups.get(1).size}</strong><small>customers</small></a>
+            <a class="stat" data-follow-up-stat="2" href="/dashboard?session=${encodeURIComponent(session)}&followup=2"><span>2 Follow-ups</span><strong>${followUpCustomerGroups.get(2).size}</strong><small>customers</small></a>
+            <a class="stat" data-follow-up-stat="3" href="/dashboard?session=${encodeURIComponent(session)}&followup=3"><span>3 Follow-ups</span><strong>${followUpCustomerGroups.get(3).size}</strong><small>customers</small></a>
           </div>
           ${dashboardContent}
         </main>
         <script>
+          const updateGroupStats = (counts = {}) => {
+            document.querySelectorAll('[data-follow-up-stat]').forEach((card) => {
+              const value = counts[card.dataset.followUpStat];
+              if (value !== undefined) card.querySelector('strong').textContent = value;
+            });
+          };
+
+          const updateBulkPanel = (groupCounts = {}, eligibleCounts = {}) => {
+            const form = document.querySelector('.bulk-follow-up-form');
+            const stageValue = document.body.dataset.followUpStage;
+            if (!form || stageValue === '') return;
+            const total = Number(groupCounts[stageValue] || 0);
+            const eligible = Number(eligibleCounts[stageValue] || 0);
+            const excluded = Math.max(0, total - eligible);
+            const summary = form.querySelector('.bulk-eligibility');
+            const note = form.querySelector('.bulk-note');
+            if (summary) summary.textContent = eligible + ' eligible of ' + total + ' customer' + (total === 1 ? '' : 's');
+            if (note) note.textContent = (excluded ? excluded + ' excluded because email marketing consent is missing. ' : '') + 'Eligible recipients are added in BCC; one Gmail compose will open.';
+
+            let button = form.querySelector('.bulk-follow-up');
+            let unavailable = form.querySelector('.bulk-unavailable');
+            if (!eligible) {
+              button?.remove();
+              if (!unavailable) {
+                unavailable = document.createElement('span');
+                unavailable.className = 'bulk-unavailable';
+                unavailable.textContent = 'No eligible marketing subscribers in this group';
+                form.querySelector('.bulk-summary').insertAdjacentElement('afterend', unavailable);
+              }
+            } else {
+              unavailable?.remove();
+              if (button) {
+                button.disabled = false;
+                button.textContent = 'Open Gmail for ' + eligible + ' eligible customer' + (eligible === 1 ? '' : 's') + (Number(stageValue) === 2 ? ' + coupon' : '');
+              }
+            }
+          };
+
+          const removeEmptyTable = () => {
+            const table = document.querySelector('table');
+            if (table && !table.querySelector('tbody tr')) {
+              const empty = document.createElement('div');
+              empty.className = 'empty';
+              empty.textContent = 'No customers remain in this follow-up group.';
+              table.replaceWith(empty);
+            }
+          };
+
+          const updateSingleRow = (form, data) => {
+            const row = form.closest('tr');
+            if (!row) return;
+            const stageValue = document.body.dataset.followUpStage;
+            if (stageValue !== '') {
+              const stage = Number(stageValue);
+              const customerStillInGroup = (data.customerStages || []).includes(stage);
+              const customerId = row.dataset.customerId;
+              if (customerStillInGroup) row.remove();
+              else {
+                document.querySelectorAll('tbody tr').forEach((candidate) => {
+                  if (candidate.dataset.customerId === customerId) candidate.remove();
+                });
+              }
+              removeEmptyTable();
+              return;
+            }
+
+            const cell = form.parentElement;
+            const count = cell.querySelector('.follow-up-count');
+            if (count) count.textContent = 'Follow-ups: ' + data.followUpCount + ' / 3';
+            let last = cell.querySelector('.follow-up-last');
+            if (!last) {
+              last = document.createElement('small');
+              last.className = 'follow-up-last';
+              count.insertAdjacentElement('afterend', last);
+            }
+            last.textContent = 'Last: ' + new Date(data.lastFollowUpAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+
+            if (data.followUpCount >= 3) {
+              const complete = document.createElement('span');
+              complete.className = 'complete';
+              complete.textContent = 'Follow-ups complete';
+              form.replaceWith(complete);
+              return;
+            }
+
+            form.querySelector('.coupon-input')?.remove();
+            const button = form.querySelector('.follow-up');
+            const next = data.followUpCount + 1;
+            if (next === 3) {
+              const coupon = document.createElement('input');
+              coupon.className = 'coupon-input';
+              coupon.type = 'text';
+              coupon.name = 'couponCode';
+              coupon.placeholder = 'Coupon code';
+              coupon.maxLength = 64;
+              coupon.required = true;
+              form.insertBefore(coupon, button);
+            }
+            button.disabled = false;
+            button.textContent = 'Email follow-up #' + next + (next === 3 ? ' + coupon' : '');
+          };
+
+          const applyFollowUpResult = (form, data, isBulk) => {
+            updateGroupStats(data.groupCounts);
+            updateBulkPanel(data.groupCounts, data.eligibleGroupCounts);
+            if (isBulk) {
+              const affected = new Set(data.customerIds || []);
+              document.querySelectorAll('tbody tr').forEach((row) => {
+                if (affected.has(row.dataset.customerId)) row.remove();
+              });
+              removeEmptyTable();
+            } else {
+              updateSingleRow(form, data);
+            }
+          };
+
           document.addEventListener('submit', async (event) => {
             const form = event.target.closest('.follow-up-form,.bulk-follow-up-form');
             if (!form) return;
@@ -870,7 +1014,7 @@ async function renderDashboard(env, session, customerId = '', view = '', followU
               const data = await response.json().catch(() => ({}));
               if (!response.ok || !data.emailUrl) throw new Error(data.error || 'Follow-up could not be saved');
               popup.location.href = data.emailUrl;
-              window.location.reload();
+              applyFollowUpResult(form, data, isBulk);
             } catch (error) {
               popup.close();
               if (button) {
@@ -991,7 +1135,11 @@ async function handleDashboardFollowUp(request, env) {
   const [product] = await getProducts(env, [productId]);
   if (!product) return badRequest('Product was not found');
 
-  const record = await getFollowUpRecord(env, customerId, productId);
+  const followUpRecords = await loadFollowUpRecords(env, customers);
+  const record = followUpRecords.get(`${customerId}:${productId}`) || {
+    count: 0,
+    lastFollowUpAt: null,
+  };
   const nextFollowUp = record.count + 1;
   if (nextFollowUp > 3) return badRequest('All three follow-ups are already complete');
   if (nextFollowUp === 3 && !/^[A-Za-z0-9_-]{2,64}$/.test(couponCode)) {
@@ -999,12 +1147,30 @@ async function handleDashboardFollowUp(request, env) {
   }
 
   const emailUrl = followUpEmailUrl(env, customer, product, nextFollowUp, couponCode);
+  const recordedAt = new Date().toISOString();
   await env.WISHLIST_TOKENS.put(
     followUpRecordKey(customerId, productId),
-    JSON.stringify({ count: nextFollowUp, lastFollowUpAt: new Date().toISOString() })
+    JSON.stringify({ count: nextFollowUp, lastFollowUpAt: recordedAt })
   );
+  followUpRecords.set(`${customerId}:${productId}`, {
+    count: nextFollowUp,
+    lastFollowUpAt: recordedAt,
+  });
+  const summary = summarizeFollowUps(customers, followUpRecords);
+  const customerStages = [...summary.groupSets]
+    .filter(([, ids]) => ids.has(customerId))
+    .map(([stage]) => stage);
   if ((request.headers.get('Accept') || '').includes('application/json')) {
-    return json({ emailUrl, followUpCount: nextFollowUp });
+    return json({
+      emailUrl,
+      followUpCount: nextFollowUp,
+      lastFollowUpAt: recordedAt,
+      customerId,
+      productId,
+      customerStages,
+      groupCounts: summary.groupCounts,
+      eligibleGroupCounts: summary.eligibleGroupCounts,
+    });
   }
   return Response.redirect(emailUrl, 303);
 }
@@ -1031,29 +1197,21 @@ async function handleBulkDashboardFollowUp(request, env) {
   }
 
   const customers = await getWishlistCustomers(env);
-  const customerRecords = await Promise.all(
-    customers.map(async (customer) => ({
-      customer,
-      records: await Promise.all(
-        customer.ids.map(async (productId) => ({
-          productId,
-          record: await getFollowUpRecord(env, customer.id, productId),
-        }))
-      ),
-    }))
-  );
-  const eligible = customerRecords
-    .map(({ customer, records }) => {
+  const followUpRecords = await loadFollowUpRecords(env, customers);
+  const beforeSummary = summarizeFollowUps(customers, followUpRecords);
+  const eligible = customers
+    .map((customer) => {
       if (
         !customer.email ||
         customer.emailMarketingConsent?.marketingState !== 'SUBSCRIBED'
       ) return null;
-      const matching =
-        stage === 0
-          ? records.every(({ record }) => record.count === 0)
-            ? records
-            : []
-          : records.filter(({ record }) => record.count === stage);
+      if (!beforeSummary.groupSets.get(stage).has(customer.id)) return null;
+      const matching = customer.ids
+        .filter(
+          (productId) =>
+            (followUpRecords.get(`${customer.id}:${productId}`)?.count || 0) === stage
+        )
+        .map((productId) => ({ productId }));
       return matching.length ? { customer, matching } : null;
     })
     .filter(Boolean);
@@ -1066,12 +1224,16 @@ async function handleBulkDashboardFollowUp(request, env) {
   const recordedAt = new Date().toISOString();
   await Promise.all(
     eligible.flatMap(({ customer, matching }) =>
-      matching.map(({ productId }) =>
-        env.WISHLIST_TOKENS.put(
+      matching.map(({ productId }) => {
+        followUpRecords.set(`${customer.id}:${productId}`, {
+          count: nextFollowUp,
+          lastFollowUpAt: recordedAt,
+        });
+        return env.WISHLIST_TOKENS.put(
           followUpRecordKey(customer.id, productId),
           JSON.stringify({ count: nextFollowUp, lastFollowUpAt: recordedAt })
-        )
-      )
+        );
+      })
     )
   );
 
@@ -1081,8 +1243,16 @@ async function handleBulkDashboardFollowUp(request, env) {
     nextFollowUp,
     couponCode
   );
+  const summary = summarizeFollowUps(customers, followUpRecords);
   if ((request.headers.get('Accept') || '').includes('application/json')) {
-    return json({ emailUrl, followUpCount: nextFollowUp, customerCount: eligible.length });
+    return json({
+      emailUrl,
+      followUpCount: nextFollowUp,
+      customerCount: eligible.length,
+      customerIds: eligible.map(({ customer }) => customer.id),
+      groupCounts: summary.groupCounts,
+      eligibleGroupCounts: summary.eligibleGroupCounts,
+    });
   }
   return Response.redirect(emailUrl, 303);
 }
