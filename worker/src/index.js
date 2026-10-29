@@ -202,6 +202,35 @@ const followUpEmailUrl = (env, customer, product, followUpNumber, couponCode = '
   return `https://mail.google.com/mail/?${params}`;
 };
 
+const bulkFollowUpEmailUrl = (env, emails, followUpNumber, couponCode = '') => {
+  const subjects = {
+    1: 'Your House of Sandhya wishlist is waiting',
+    2: 'A reminder about your House of Sandhya wishlist',
+    3: 'A special offer for your House of Sandhya wishlist',
+  };
+  const body = [
+    'Hello,',
+    '',
+    'You have saved items waiting in your House of Sandhya wishlist.',
+    'View your wishlist:',
+    storefrontUrl(env, '/pages/wishlist'),
+    ...(followUpNumber === 3
+      ? ['', `As a special thank-you, use coupon code ${couponCode} at checkout.`]
+      : []),
+    '',
+    'Regards,',
+    'House of Sandhya',
+  ].join('\n');
+  const params = new URLSearchParams({
+    view: 'cm',
+    fs: '1',
+    bcc: emails.join(','),
+    su: subjects[followUpNumber],
+    body,
+  });
+  return `https://mail.google.com/mail/?${params}`;
+};
+
 async function getFollowUpRecord(env, customerId, productId) {
   const record = await env.WISHLIST_TOKENS.get(followUpRecordKey(customerId, productId), 'json');
   return record && Number.isFinite(record.count)
@@ -492,6 +521,7 @@ async function getWishlistCustomers(env) {
               id
               displayName
               email
+              emailMarketingConsent { marketingState }
               phone
               createdAt
               ids: metafield(namespace: $namespace, key: $key) { value updatedAt }
@@ -687,6 +717,26 @@ async function renderDashboard(env, session, customerId = '', view = '', followU
   const tableHead = selectedCustomer
     ? '<tr><th>Product</th><th>Price</th><th>Wishlist time</th><th>Wishlist age</th><th>Purchase status</th><th>Follow-up</th></tr>'
     : '<tr><th>Customer</th><th>Product</th><th>Price</th><th>Wishlist time</th><th>Wishlist age</th><th>Purchase status</th><th>Follow-up</th></tr>';
+  const bulkCustomerCount = isFollowUpView
+    ? visibleCustomers.filter(
+        (customer) =>
+          customer.email && customer.emailMarketingConsent?.marketingState === 'SUBSCRIBED'
+      ).length
+    : 0;
+  const bulkFollowUpAction =
+    isFollowUpView && followUpStage < 3 && bulkCustomerCount
+      ? `<form class="bulk-follow-up-form" method="post" action="/dashboard/follow-up/bulk" target="_blank">
+          <input type="hidden" name="session" value="${escapeHtml(session)}">
+          <input type="hidden" name="stage" value="${followUpStage}">
+          ${
+            followUpStage === 2
+              ? '<input class="coupon-input bulk-coupon" type="text" name="couponCode" placeholder="Coupon code for everyone" maxlength="64" required>'
+              : ''
+          }
+          <button class="bulk-follow-up" type="submit">Email all ${bulkCustomerCount} customer${bulkCustomerCount === 1 ? '' : 's'} - follow-up #${followUpStage + 1}${followUpStage === 2 ? ' + coupon' : ''}</button>
+          <small>Only subscribed marketing customers are added in BCC. One Gmail compose will open.</small>
+        </form>`
+      : '';
   const dashboardContent = selectedCustomer
     ? `<div class="toolbar"><a class="back" href="/dashboard?session=${encodeURIComponent(session)}">Back to customers</a></div>
        <h2>${escapeHtml(selectedCustomer.displayName || selectedCustomer.email || 'Customer wishlist')}</h2>
@@ -709,6 +759,7 @@ async function renderDashboard(env, session, customerId = '', view = '', followU
       ? `<div class="toolbar"><a class="back" href="/dashboard?session=${encodeURIComponent(session)}">Back to customers</a></div>
          <h2>${followUpStage === 0 ? 'Customers with no follow-ups' : `Customers with ${followUpStage} follow-up${followUpStage === 1 ? '' : 's'}`}</h2>
          <p class="group-note">${followUpStage === 0 ? 'Showing customers who have not received any wishlist follow-up yet.' : `Showing wishlist products currently at follow-up stage ${followUpStage}.`}</p>
+         ${bulkFollowUpAction}
          ${
            rows
              ? `<table><thead>${tableHead}</thead><tbody>${rows}</tbody></table>`
@@ -747,6 +798,11 @@ async function renderDashboard(env, session, customerId = '', view = '', followU
           .follow-up-form{display:grid;gap:7px;margin-top:8px}
           .coupon-input{box-sizing:border-box;width:150px;border:1px solid #c9cccf;border-radius:6px;padding:8px}
           .follow-up:disabled{background:#8c9196;cursor:default}
+          .bulk-follow-up-form{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:16px 0;padding:14px;background:#fff;border:1px solid #ddd;border-radius:8px}
+          .bulk-follow-up{border:0;border-radius:6px;padding:11px 15px;background:#111;color:#fff;font-weight:700;cursor:pointer}
+          .bulk-follow-up:disabled{background:#8c9196;cursor:default}
+          .bulk-follow-up-form small{flex-basis:100%}
+          .bulk-coupon{width:210px}
           .complete{display:block;margin-top:7px;color:#287d3c;font-size:13px;font-weight:600;white-space:nowrap}
           .unavailable{color:#8c9196;font-size:13px;white-space:nowrap}
           table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #ddd}
@@ -772,6 +828,19 @@ async function renderDashboard(env, session, customerId = '', view = '', followU
         </main>
         <script>
           document.addEventListener('submit', (event) => {
+            const bulkForm = event.target.closest('.bulk-follow-up-form');
+            if (bulkForm) {
+              if (!confirm('Open one BCC email and record this follow-up for every customer in this group?')) {
+                event.preventDefault();
+                return;
+              }
+              const bulkButton = bulkForm.querySelector('.bulk-follow-up');
+              if (bulkButton) {
+                bulkButton.disabled = true;
+                bulkButton.textContent = 'Bulk follow-up opened - refresh dashboard';
+              }
+              return;
+            }
             const form = event.target.closest('.follow-up-form');
             if (!form) return;
             const button = form.querySelector('.follow-up');
@@ -910,6 +979,81 @@ async function handleDashboardFollowUp(request, env) {
   return Response.redirect(emailUrl, 303);
 }
 
+async function handleBulkDashboardFollowUp(request, env) {
+  const form = await request.formData();
+  const session = String(form.get('session') || '');
+  const stageValue = String(form.get('stage') || '');
+  const couponCode = String(form.get('couponCode') || '').trim();
+  const storedShop = await env.WISHLIST_TOKENS.get(adminSessionKey(session));
+
+  if (storedShop !== env.SHOPIFY_SHOP) {
+    return new Response('Unauthorized dashboard session. Open the app again from Shopify admin.', {
+      status: 401,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+    });
+  }
+  if (!['0', '1', '2'].includes(stageValue)) return badRequest('Invalid follow-up group');
+
+  const stage = Number(stageValue);
+  const nextFollowUp = stage + 1;
+  if (nextFollowUp === 3 && !/^[A-Za-z0-9_-]{2,64}$/.test(couponCode)) {
+    return badRequest('Enter a valid coupon code for the third follow-up');
+  }
+
+  const customers = await getWishlistCustomers(env);
+  const customerRecords = await Promise.all(
+    customers.map(async (customer) => ({
+      customer,
+      records: await Promise.all(
+        customer.ids.map(async (productId) => ({
+          productId,
+          record: await getFollowUpRecord(env, customer.id, productId),
+        }))
+      ),
+    }))
+  );
+  const eligible = customerRecords
+    .map(({ customer, records }) => {
+      if (
+        !customer.email ||
+        customer.emailMarketingConsent?.marketingState !== 'SUBSCRIBED'
+      ) return null;
+      const matching =
+        stage === 0
+          ? records.every(({ record }) => record.count === 0)
+            ? records
+            : []
+          : records.filter(({ record }) => record.count === stage);
+      return matching.length ? { customer, matching } : null;
+    })
+    .filter(Boolean);
+
+  if (!eligible.length) return badRequest('No eligible customers were found in this group');
+  if (eligible.length > 90) {
+    return badRequest('This Gmail bulk action supports up to 90 customers at a time');
+  }
+
+  const recordedAt = new Date().toISOString();
+  await Promise.all(
+    eligible.flatMap(({ customer, matching }) =>
+      matching.map(({ productId }) =>
+        env.WISHLIST_TOKENS.put(
+          followUpRecordKey(customer.id, productId),
+          JSON.stringify({ count: nextFollowUp, lastFollowUpAt: recordedAt })
+        )
+      )
+    )
+  );
+
+  const emailUrl = bulkFollowUpEmailUrl(
+    env,
+    [...new Set(eligible.map(({ customer }) => customer.email))],
+    nextFollowUp,
+    couponCode
+  );
+  return Response.redirect(emailUrl, 303);
+}
+
 async function handleAuthStart(request, env) {
   const url = new URL(request.url);
   const shop = (url.searchParams.get('shop') || env.SHOPIFY_SHOP || '').trim();
@@ -1010,6 +1154,11 @@ async function handleRequest(request, env) {
   if (url.pathname === '/dashboard/follow-up') {
     if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
     return handleDashboardFollowUp(request, env);
+  }
+
+  if (url.pathname === '/dashboard/follow-up/bulk') {
+    if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
+    return handleBulkDashboardFollowUp(request, env);
   }
 
   if (url.pathname === '/dashboard.csv') {
