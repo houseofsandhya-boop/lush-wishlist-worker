@@ -723,9 +723,15 @@ async function renderDashboard(env, session, customerId = '', view = '', followU
           customer.email && customer.emailMarketingConsent?.marketingState === 'SUBSCRIBED'
       ).length
     : 0;
+  const bulkGroupCount = isFollowUpView ? visibleCustomers.length : 0;
+  const bulkExcludedCount = bulkGroupCount - bulkCustomerCount;
   const bulkFollowUpAction =
-    isFollowUpView && followUpStage < 3 && bulkCustomerCount
+    isFollowUpView && followUpStage < 3 && bulkGroupCount
       ? `<form class="bulk-follow-up-form" method="post" action="/dashboard/follow-up/bulk" target="_blank">
+          <div class="bulk-summary">
+            <strong>Bulk follow-up #${followUpStage + 1}</strong>
+            <span>${bulkCustomerCount} eligible of ${bulkGroupCount} customer${bulkGroupCount === 1 ? '' : 's'}</span>
+          </div>
           <input type="hidden" name="session" value="${escapeHtml(session)}">
           <input type="hidden" name="stage" value="${followUpStage}">
           ${
@@ -733,8 +739,12 @@ async function renderDashboard(env, session, customerId = '', view = '', followU
               ? '<input class="coupon-input bulk-coupon" type="text" name="couponCode" placeholder="Coupon code for everyone" maxlength="64" required>'
               : ''
           }
-          <button class="bulk-follow-up" type="submit">Email all ${bulkCustomerCount} customer${bulkCustomerCount === 1 ? '' : 's'} - follow-up #${followUpStage + 1}${followUpStage === 2 ? ' + coupon' : ''}</button>
-          <small>Only subscribed marketing customers are added in BCC. One Gmail compose will open.</small>
+          ${
+            bulkCustomerCount
+              ? `<button class="bulk-follow-up" type="submit">Open Gmail for ${bulkCustomerCount} eligible customer${bulkCustomerCount === 1 ? '' : 's'}${followUpStage === 2 ? ' + coupon' : ''}</button>`
+              : '<span class="bulk-unavailable">No eligible marketing subscribers in this group</span>'
+          }
+          <small>${bulkExcludedCount ? `${bulkExcludedCount} excluded because email marketing consent is missing. ` : ''}Eligible recipients are added in BCC; one Gmail compose will open.</small>
         </form>`
       : '';
   const dashboardContent = selectedCustomer
@@ -799,9 +809,12 @@ async function renderDashboard(env, session, customerId = '', view = '', followU
           .coupon-input{box-sizing:border-box;width:150px;border:1px solid #c9cccf;border-radius:6px;padding:8px}
           .follow-up:disabled{background:#8c9196;cursor:default}
           .bulk-follow-up-form{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:16px 0;padding:14px;background:#fff;border:1px solid #ddd;border-radius:8px}
+          .bulk-summary{display:grid;gap:3px;margin-right:4px}
+          .bulk-summary span{color:#616161;font-size:13px}
           .bulk-follow-up{border:0;border-radius:6px;padding:11px 15px;background:#111;color:#fff;font-weight:700;cursor:pointer}
           .bulk-follow-up:disabled{background:#8c9196;cursor:default}
           .bulk-follow-up-form small{flex-basis:100%}
+          .bulk-unavailable{color:#8c9196;font-size:13px;font-weight:600}
           .bulk-coupon{width:210px}
           .complete{display:block;margin-top:7px;color:#287d3c;font-size:13px;font-weight:600;white-space:nowrap}
           .unavailable{color:#8c9196;font-size:13px;white-space:nowrap}
