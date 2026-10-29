@@ -840,30 +840,44 @@ async function renderDashboard(env, session, customerId = '', view = '', followU
           ${dashboardContent}
         </main>
         <script>
-          document.addEventListener('submit', (event) => {
-            const bulkForm = event.target.closest('.bulk-follow-up-form');
-            if (bulkForm) {
-              if (!confirm('Open one BCC email and record this follow-up for every customer in this group?')) {
-                event.preventDefault();
-                return;
-              }
-              const bulkButton = bulkForm.querySelector('.bulk-follow-up');
-              if (bulkButton) {
-                bulkButton.disabled = true;
-                bulkButton.textContent = 'Bulk follow-up opened - refresh dashboard';
-              }
+          document.addEventListener('submit', async (event) => {
+            const form = event.target.closest('.follow-up-form,.bulk-follow-up-form');
+            if (!form) return;
+            event.preventDefault();
+
+            const isBulk = form.classList.contains('bulk-follow-up-form');
+            if (isBulk && !confirm('Open one BCC email and record this follow-up for every customer in this group?')) return;
+
+            const popup = window.open('about:blank', '_blank');
+            if (!popup) {
+              alert('Please allow popups for this dashboard, then try again.');
               return;
             }
-            const form = event.target.closest('.follow-up-form');
-            if (!form) return;
-            const button = form.querySelector('.follow-up');
-            const count = form.parentElement.querySelector('.follow-up-count');
-            const match = (count?.textContent || '').match(/(\d+)\s*\/\s*3/);
-            const current = Number(match?.[1] || 0);
-            if (count) count.textContent = 'Follow-ups: ' + Math.min(3, current + 1) + ' / 3';
+
+            const button = form.querySelector(isBulk ? '.bulk-follow-up' : '.follow-up');
+            const originalLabel = button?.textContent || '';
             if (button) {
               button.disabled = true;
-              button.textContent = 'Follow-up opened - refresh to continue';
+              button.textContent = 'Preparing email...';
+            }
+
+            try {
+              const response = await fetch(form.action, {
+                method: 'POST',
+                body: new FormData(form),
+                headers: { Accept: 'application/json' },
+              });
+              const data = await response.json().catch(() => ({}));
+              if (!response.ok || !data.emailUrl) throw new Error(data.error || 'Follow-up could not be saved');
+              popup.location.href = data.emailUrl;
+              window.location.reload();
+            } catch (error) {
+              popup.close();
+              if (button) {
+                button.disabled = false;
+                button.textContent = originalLabel;
+              }
+              alert(error.message || 'Follow-up could not be saved');
             }
           });
         </script>
@@ -989,6 +1003,9 @@ async function handleDashboardFollowUp(request, env) {
     followUpRecordKey(customerId, productId),
     JSON.stringify({ count: nextFollowUp, lastFollowUpAt: new Date().toISOString() })
   );
+  if ((request.headers.get('Accept') || '').includes('application/json')) {
+    return json({ emailUrl, followUpCount: nextFollowUp });
+  }
   return Response.redirect(emailUrl, 303);
 }
 
@@ -1064,6 +1081,9 @@ async function handleBulkDashboardFollowUp(request, env) {
     nextFollowUp,
     couponCode
   );
+  if ((request.headers.get('Accept') || '').includes('application/json')) {
+    return json({ emailUrl, followUpCount: nextFollowUp, customerCount: eligible.length });
+  }
   return Response.redirect(emailUrl, 303);
 }
 
