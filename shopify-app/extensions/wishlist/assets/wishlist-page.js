@@ -4,6 +4,9 @@
 
   const status = root.querySelector('.wishlist-page__status');
   const grid = root.querySelector('.wishlist-page__grid');
+  const consent = root.querySelector('.wishlist-page__consent');
+  const consentInput = root.querySelector('.wishlist-page__consent-input');
+  const consentStatus = root.querySelector('.wishlist-page__consent-status');
   const loginUrl = root.dataset.loginUrl || '/account/login';
   const emptyText = root.dataset.emptyText || 'Your wishlist is empty.';
 
@@ -21,6 +24,40 @@
 
     .wishlist-page__status {
       padding: 24px 0;
+    }
+
+    .wishlist-page__consent {
+      max-width: 640px;
+      margin: 0 0 24px;
+      padding: 16px;
+      border: 1px solid rgba(0, 0, 0, 0.16);
+      background: #fff;
+    }
+
+    .wishlist-page__consent-label {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .wishlist-page__consent-input {
+      width: 18px;
+      height: 18px;
+      margin: 1px 0 0;
+      flex: 0 0 auto;
+    }
+
+    .wishlist-page__consent-help,
+    .wishlist-page__consent-status {
+      margin: 7px 0 0 28px;
+      font-size: 13px;
+      opacity: 0.72;
+    }
+
+    .wishlist-page__consent-status {
+      min-height: 18px;
     }
 
     .wishlist-page__grid {
@@ -159,6 +196,43 @@
       grid.appendChild(card);
     }
   };
+
+  consentInput?.addEventListener('change', async () => {
+    const subscribed = consentInput.checked;
+    consentInput.disabled = true;
+    consentStatus.textContent = 'Saving...';
+    try {
+      const data = await request('/consent', {
+        redirectOnAuth: true,
+        method: 'POST',
+        body: JSON.stringify({ subscribed }),
+      });
+      if (!data) return;
+      consentInput.checked = Boolean(data.subscribed);
+      consentStatus.textContent = data.subscribed
+        ? 'Wishlist email reminders are on.'
+        : 'Wishlist email reminders are off.';
+    } catch {
+      consentInput.checked = !subscribed;
+      consentStatus.textContent = 'Unable to save your email preference. Please try again.';
+    } finally {
+      consentInput.disabled = false;
+    }
+  });
+
+  request('/consent')
+    .then((data) => {
+      if (!data || !consent || !consentInput) return;
+      consent.hidden = false;
+      consentInput.checked = Boolean(data.subscribed);
+      consentInput.disabled = !data.hasEmail;
+      consentStatus.textContent = data.hasEmail
+        ? data.subscribed
+          ? 'Wishlist email reminders are on.'
+          : 'Wishlist email reminders are off.'
+        : 'Add an email address to your customer account to enable reminders.';
+    })
+    .catch(() => {});
 
   request('')
     .then((data) => {

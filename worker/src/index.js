@@ -127,6 +127,64 @@ async function shopifyGraphql(env, query, variables = {}) {
   return data.data;
 }
 
+async function getCustomerEmailConsent(env, customerId) {
+  const data = await shopifyGraphql(
+    env,
+    `query WishlistEmailConsent($id: ID!) {
+      customer(id: $id) {
+        email
+        emailMarketingConsent { marketingState consentUpdatedAt }
+      }
+    }`,
+    { id: customerGid(customerId) }
+  );
+  const consent = data.customer?.emailMarketingConsent;
+  return {
+    hasEmail: Boolean(data.customer?.email),
+    subscribed: consent?.marketingState === 'SUBSCRIBED',
+    state: consent?.marketingState || 'NOT_SUBSCRIBED',
+    updatedAt: consent?.consentUpdatedAt || null,
+  };
+}
+
+async function updateCustomerEmailConsent(env, customerId, subscribed) {
+  const emailMarketingConsent = {
+    marketingState: subscribed ? 'SUBSCRIBED' : 'UNSUBSCRIBED',
+    consentUpdatedAt: new Date().toISOString(),
+  };
+  if (subscribed) emailMarketingConsent.marketingOptInLevel = 'SINGLE_OPT_IN';
+
+  const data = await shopifyGraphql(
+    env,
+    `mutation UpdateWishlistEmailConsent($input: CustomerEmailMarketingConsentUpdateInput!) {
+      customerEmailMarketingConsentUpdate(input: $input) {
+        customer {
+          email
+          emailMarketingConsent { marketingState consentUpdatedAt }
+        }
+        userErrors { field message }
+      }
+    }`,
+    {
+      input: {
+        customerId: customerGid(customerId),
+        emailMarketingConsent,
+      },
+    }
+  );
+  const result = data.customerEmailMarketingConsentUpdate;
+  if (result.userErrors?.length) {
+    throw new Error(result.userErrors.map((error) => error.message).join(', '));
+  }
+  const consent = result.customer?.emailMarketingConsent;
+  return {
+    hasEmail: Boolean(result.customer?.email),
+    subscribed: consent?.marketingState === 'SUBSCRIBED',
+    state: consent?.marketingState || 'NOT_SUBSCRIBED',
+    updatedAt: consent?.consentUpdatedAt || null,
+  };
+}
+
 const customerGid = (id) => `gid://shopify/Customer/${id}`;
 
 const escapeHtml = (value = '') =>
@@ -1381,6 +1439,14 @@ async function handleRequest(request, env) {
   if (!customerId) return json({ error: 'Customer login required' }, 401);
 
   const suffix = url.pathname.replace(/^\/apps\/wishlist/, '') || '/';
+  if (suffix === '/consent') {
+    if (request.method === 'GET') return json(await getCustomerEmailConsent(env, customerId));
+    if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
+    const body = await request.json().catch(() => null);
+    if (typeof body?.subscribed !== 'boolean') return badRequest('Missing subscribed preference');
+    return json(await updateCustomerEmailConsent(env, customerId, body.subscribed));
+  }
+
   const wishlist = await getWishlistData(env, customerId);
   const currentIds = wishlist.ids;
 

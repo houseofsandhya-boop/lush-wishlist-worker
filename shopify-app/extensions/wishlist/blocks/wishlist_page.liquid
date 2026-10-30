@@ -6,6 +6,14 @@
   data-login-url="{{ routes.account_login_url }}"
 >
   <h1 class="wishlist-page__heading">{{ block.settings.heading }}</h1>
+  <div class="wishlist-page__consent" hidden>
+    <label class="wishlist-page__consent-label">
+      <input class="wishlist-page__consent-input" type="checkbox">
+      <span>{{ block.settings.consent_label }}</span>
+    </label>
+    <p class="wishlist-page__consent-help">{{ block.settings.consent_help }}</p>
+    <p class="wishlist-page__consent-status" aria-live="polite"></p>
+  </div>
   <div class="wishlist-page__status">Loading wishlist...</div>
   <div class="wishlist-page__grid" hidden></div>
 </div>
@@ -27,6 +35,18 @@
       "id": "empty_text",
       "label": "Empty message",
       "default": "Your wishlist is empty."
+    },
+    {
+      "type": "text",
+      "id": "consent_label",
+      "label": "Email consent label",
+      "default": "Email me wishlist reminders, product updates and offers"
+    },
+    {
+      "type": "text",
+      "id": "consent_help",
+      "label": "Email consent help text",
+      "default": "This controls marketing emails from House of Sandhya. You can turn it off at any time."
     }
   ]
 }
